@@ -24,6 +24,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
+        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
     },
 )
 
@@ -36,6 +39,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
+        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
     },
 )
 
@@ -52,6 +58,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubeNoVelObsPPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
+        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
     },
 )
 
@@ -64,5 +73,8 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubeNoVelObsPPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
+        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
     },
 )

@@ -9,6 +9,7 @@ import collections
 import gymnasium as gym
 import importlib
 import inspect
+import json
 import os
 import re
 import yaml
@@ -20,7 +21,7 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
     """Load default configuration given its entry point from the gym registry.
 
     This function loads the configuration object from the gym registry for the given task name.
-    It supports both YAML and Python configuration files.
+    It supports YAML, JSON, and Python configuration files.
 
     It expects the configuration to be registered in the gym registry as:
 
@@ -45,7 +46,7 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
         entry_point_key: The entry point key to resolve the configuration file.
 
     Returns:
-        The parsed configuration object. If the entry point is a YAML file, it is parsed into a dictionary.
+        The parsed configuration object. If the entry point is a YAML or JSON file, it is parsed into a dictionary.
         If the entry point is a Python class, it is instantiated and returned.
 
     Raises:
@@ -68,6 +69,7 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
                 agent = spec[0].replace("-", "_")
                 algorithms = [item.upper() for item in (spec[1:] if len(spec) > 1 else ["PPO"])]
                 agents[agent].extend(algorithms)
+        
         msg = "\nExisting RL library (and algorithms) config entry points: "
         for agent, algorithms in agents.items():
             msg += f"\n  |-- {agent}: {', '.join(algorithms)}"
@@ -78,7 +80,7 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
             f"{msg if agents else ''}"
         )
     # parse the default config file
-    if isinstance(cfg_entry_point, str) and cfg_entry_point.endswith(".yaml"):
+    if isinstance(cfg_entry_point, str) and (cfg_entry_point.endswith(".yaml") or cfg_entry_point.endswith(".json")):
         if os.path.exists(cfg_entry_point):
             # absolute path for the config file
             config_file = cfg_entry_point
@@ -91,7 +93,10 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
         # load the configuration
         print(f"[INFO]: Parsing configuration from: {config_file}")
         with open(config_file, encoding="utf-8") as f:
-            cfg = yaml.full_load(f)
+            if cfg_entry_point.endswith(".yaml"):
+                cfg = yaml.full_load(f)
+            else:  # .json file
+                cfg = json.load(f)
     else:
         if callable(cfg_entry_point):
             # resolve path to the module location
