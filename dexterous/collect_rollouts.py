@@ -10,13 +10,15 @@ import os
 import time
 import gymnasium as gym
 import torch
-
+from tqdm import tqdm
 from isaaclab.app import AppLauncher
 import cli_args  # isort: skip
+
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Collect (state, action) rollouts from a trained RL policy.")
 parser.add_argument("--num_steps", type=int, default=10000, help="Number of steps to collect.")
+parser.add_argument("--train_split", type=float, default=.8, help="Percent of steps to use for training.")
 parser.add_argument("--output", type=str, default="rollouts.hdf5", help="Output HDF5 file for the dataset.")
 parser.add_argument("--num_envs", type=int, default=8, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
@@ -40,7 +42,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 from isaaclab.utils.datasets import EpisodeData, HDF5DatasetFileHandler
-
+from globals import OBS_INDICES, GOAL_INDICES
 
 def main():
     """Collect rollouts with RSL-RL agent and save in robomimic-compatible HDF5 format."""
@@ -90,53 +92,56 @@ def main():
     dt = env.unwrapped.step_dt
     step_count = 0
 
-    # Define the indices for each observation key (start, end)
-    obs_indices = {
-        "robot0_joint_pos": (0, 16),
-        "robot0_joint_vel": (16, 32),
-        "object_pos": (32, 35),
-        "object_quat": (35, 39),
-        "object_lin_vel": (39, 42),
-        "object_ang_vel": (42, 45),
-        "last_action": (56, 72),
-    }
 
-    goal_indices = {
-       "goal_pose": (45, 52),
-       "goal_quat_diff": (52, 56),
-    }
 
     print(f"[INFO] Collecting {num_steps} steps of (state, action) data with {num_envs} envs...")
-    while simulation_app.is_running() and step_count < num_steps:
-        start_time = time.time()
-        with torch.inference_mode():
-            actions = policy(obs)
-            # Add each env's data to its own episode, saving each observation component under obs/
-            for i in range(num_envs):
-                for key, (start, end) in obs_indices.items():
-                    episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
+    
+    with tqdm(total=num_steps, desc="Collecting rollouts") as pbar:
+        while simulation_app.is_running() and step_count < num_steps:
+            start_time = time.time()
+            with torch.inference_mode():
+                actions = policy(obs)
+                # Add each env's data to its own episode, saving each observation component under obs/
+                for i in range(num_envs):
+                    for key, (start, end) in OBS_INDICES.items():
+                        episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
+                        
+                    for key, (start, end) in GOAL_INDICES.items():
+                        episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
                     
-                for key, (start, end) in goal_indices.items():
-                    episodes[i].add(f"goal/{key}", obs[i, start:end].cpu())
-                
-                episodes[i].add("actions", actions[i].cpu())
-            
-            obs, _, _, _ = env.step(actions)
-        step_count += num_envs
-        if step_count % 1000 == 0:
-            print(f"[INFO] Collected {step_count} steps...")
-        # time delay for real-time evaluation
-        sleep_time = dt - (time.time() - start_time)
-        if args_cli.real_time and sleep_time > 0:
-            time.sleep(sleep_time)
-        if step_count >= num_steps:
-            break
+                    episodes[i].add("actions", actions[i].cpu())
+                    
+                obs, _, _, _ = env.step(actions)
+            step_count += num_envs
 
+            # time delay for real-time evaluation
+            sleep_time = dt - (time.time() - start_time)
+            if args_cli.real_time and sleep_time > 0:
+                time.sleep(sleep_time)
+            if step_count >= num_steps:
+                break
+            
+            pbar.update(step_count)
+            
     # Write each environment's episode as a separate demo (robomimic-compatible)
     for ep in episodes:
         handler.write_episode(ep)
+    
+    # split into train and test by adding a field {mask/train: [demo0, demo1, ...]} and another field {mask/test: [demo0, demo1, ...]}
+    num_episodes = len(episodes)
+    split_idx = int(args_cli.train_split * num_episodes)
+    demo_keys = [f"demo_{i}" for i in range(num_episodes)]
+    train_demo_keys = demo_keys[:split_idx]
+    test_demo_keys = demo_keys[split_idx:]
+    handler.add_mask_field("train", train_demo_keys)
+    handler.add_mask_field("test", test_demo_keys)
+
+    assert len(train_demo_keys) > 0 and len(test_demo_keys) > 0, "No episodes were added to the train or test split"
+    
     handler.flush()
     handler.close()
+
+
     print(f"[INFO] Done. Saved {step_count} samples to {args_cli.output}.")
     env.close()
 

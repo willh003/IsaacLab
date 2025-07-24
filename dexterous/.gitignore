@@ -2,3 +2,4 @@ logs/
 outputs/
 wandb/
 data/
+.pretrained_checkpoints/

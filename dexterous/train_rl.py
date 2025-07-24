@@ -43,6 +43,8 @@ parser.add_argument("--save_interval", type=int, default=50, help="RL Policy tra
 parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
+
+
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args

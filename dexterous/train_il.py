@@ -66,6 +66,10 @@ import psutil
 import collections
 
 # Robomimic imports
+# IMPORTANT: do not remove these, because they are required to register the diffusion policy
+from dp import DiffusionPolicyConfig, DiffusionPolicyUNet
+from utils import get_exp_dir
+
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.obs_utils as ObsUtils
@@ -85,6 +89,8 @@ from isaaclab.app import AppLauncher
 app_launcher = AppLauncher(headless=True)
 simulation_app = app_launcher.app
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
+
+import wandb
 
 def normalize_hdf5_actions(config: Config, log_dir: str) -> str:
     """Normalizes actions in hdf5 dataset to [-1, 1] range.
@@ -132,7 +138,7 @@ def normalize_hdf5_actions(config: Config, log_dir: str) -> str:
     return normalized_path
 
 
-def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: str):
+def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: str, wandb_mode: str = "online"):
     """Train a model using the algorithm specified in config.
 
     Args:
@@ -141,6 +147,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         log_dir: Directory to save logs.
         ckpt_dir: Directory to save checkpoints.
         video_dir: Directory to save videos.
+        wandb_mode: Wandb mode.
     """
     # first set seeds
     np.random.seed(config.train.seed)
@@ -153,12 +160,6 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     print(f">>> Saving logs into directory: {log_dir}")
     print(f">>> Saving checkpoints into directory: {ckpt_dir}")
     print(f">>> Saving videos into directory: {video_dir}")
-
-    if config.experiment.logging.terminal_output_to_txt:
-        # log stdout and stderr to a text file
-        logger = PrintLogger(os.path.join(log_dir, "log.txt"))
-        sys.stdout = logger
-        sys.stderr = logger
 
     # read config to set up metadata for observation modalities (e.g. detecting rgb observations)
     ObsUtils.initialize_obs_utils_with_config(config)
@@ -189,7 +190,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         ac_dim=shape_meta["ac_dim"],
         device=device,
     )
-
+    breakpoint()
     # save the config as a json file
     with open(os.path.join(log_dir, "..", "config.json"), "w") as outfile:
         json.dump(config, outfile, indent=4)
@@ -200,6 +201,8 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
 
     # load training data
     trainset, validset = TrainUtils.load_data_for_training(config, obs_keys=shape_meta["all_obs_keys"])
+    
+    
     train_sampler = trainset.get_dataset_sampler()
     print("\n============= Training Dataset =============")
     print(trainset)
@@ -269,6 +272,27 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     else:
         valid_loader = None
 
+    # Monkey-patch wandb.save to avoid uploading large files
+    original_save = wandb.save
+    def selective_save(glob_str, base_path=None, policy="live"):
+        if any(pattern in glob_str for pattern in [".ckpy", ".pt", ".pth", ".pkl", ".pt.gz", ".pth.gz", ".pkl.gz"]):
+            return
+        return original_save(glob_str, base_path=base_path, policy=policy)
+    wandb.save = selective_save
+    
+    wandb_cfg = dict(config)
+    wandb_cfg["train"]["train_length"] = len(trainset)
+    if config.experiment.validate:
+        wandb_cfg["train"]["valid_length"] = len(validset)
+    
+    wandb.init(
+        project="dexterous",
+        entity="willhu003",
+        name=os.path.basename(os.path.dirname(log_dir)), # log dir is under the experiment dir
+        config=wandb_cfg,
+        dir=log_dir,
+        mode=wandb_mode
+    )
 
     # main training loop
     best_valid_loss = None
@@ -283,7 +307,6 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         model.on_epoch_end(epoch)
 
         # setup checkpoint path
-        epoch_ckpt_name = f"model_epoch_{epoch}"
 
         # check for recurring checkpoint saving conditions
         should_save_ckpt = False
@@ -310,6 +333,11 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
                 data_logger.record(f"Timing_Stats/Train_{k[5:]}", v, epoch)
             else:
                 data_logger.record(f"Train/{k}", v, epoch)
+        
+
+        wandb_dict = {f"train/{k}": v for k, v in step_log.items() if "time" not in k.lower()}
+        wandb_dict.update({f"time/{k}": v for k, v in step_log.items() if "time" in k.lower()})
+        wandb.log(wandb_dict, step=epoch)
 
         # Evaluate the model on validation set
         if config.experiment.validate:
@@ -322,6 +350,8 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
                     data_logger.record(f"Timing_Stats/Valid_{k[5:]}", v, epoch)
                 else:
                     data_logger.record(f"Valid/{k}", v, epoch)
+            # Log to wandb
+            wandb.log({f"validation/{k}": v for k, v in step_log.items() if "time" not in k.lower()}, step=epoch)
 
             print(f"Validation Epoch {epoch}")
             print(json.dumps(step_log, sort_keys=True, indent=4))
@@ -331,7 +361,6 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
             if valid_check and (best_valid_loss is None or (step_log["Loss"] <= best_valid_loss)):
                 best_valid_loss = step_log["Loss"]
                 if config.experiment.save.enabled and config.experiment.save.on_best_validation:
-                    epoch_ckpt_name += f"_best_validation_{best_valid_loss}"
                     should_save_ckpt = True
                     ckpt_reason = "valid" if ckpt_reason is None else ckpt_reason
 
@@ -342,18 +371,23 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
                 config=config,
                 env_meta=env_meta,
                 shape_meta=shape_meta,
-                ckpt_path=os.path.join(ckpt_dir, epoch_ckpt_name + ".pth"),
+                ckpt_path=os.path.join(ckpt_dir, "ckpt.pth"),
                 obs_normalization_stats=obs_normalization_stats,
             )
+            print("Saved checkpoint to ", os.path.join(ckpt_dir, "ckpt.pth"))
 
         # Finally, log memory usage in MB
         process = psutil.Process(os.getpid())
         mem_usage = int(process.memory_info().rss / 1000000)
         data_logger.record("System/RAM Usage (MB)", mem_usage, epoch)
         print(f"\nEpoch {epoch} Memory Usage: {mem_usage} MB\n")
+        
+        wandb.log({"System/RAM Usage (MB)": mem_usage}, step=epoch)
 
     # terminate logging
     data_logger.close()
+    
+    wandb.finish()
 
 
 def filter_config_dict(cfg, base_cfg):
@@ -397,6 +431,15 @@ def main(args: argparse.Namespace):
 
     if args.dataset is not None:
         config.train.data = args.dataset
+    else:
+        raise ValueError("Please provide a dataset path through CLI arguments.")
+
+    if args.obs_cond is not None:
+        print(f"Overriding observation conditioning with: {args.obs_cond}")
+        config.observation.modalities.obs.low_dim = args.obs_cond
+    if args.goal_cond is not None:
+        print(f"Overriding goal conditioning with: {args.goal_cond}")
+        config.observation.modalities.goal.low_dim = args.goal_cond
 
     if args.name is not None:
         config.experiment.name = args.name
@@ -404,8 +447,8 @@ def main(args: argparse.Namespace):
     # change location of experiment directory
     config.train.output_dir = os.path.abspath(os.path.join("./logs", args.log_dir, args.task))
 
-    log_dir, ckpt_dir, video_dir = TrainUtils.get_exp_dir(config)
-
+    log_dir, ckpt_dir, video_dir = get_exp_dir(config.train.output_dir, config.experiment.name, config.experiment.save.enabled)
+    
     if args.normalize_training_actions:
         config.train.data = normalize_hdf5_actions(config, log_dir)
 
@@ -417,7 +460,7 @@ def main(args: argparse.Namespace):
     # catch error during training and print it
     res_str = "finished run successfully!"
     try:
-        train(config, device, log_dir, ckpt_dir or "", video_dir)
+        train(config, device, log_dir, ckpt_dir or "", video_dir, wandb_mode=args.wandb)
     except Exception as e:
         res_str = f"run failed with error:\n{e}\n\n{traceback.format_exc()}"
     print(res_str)
@@ -446,6 +489,9 @@ if __name__ == "__main__":
     parser.add_argument("--algo", type=str, default=None, help="Name of the algorithm.")
     parser.add_argument("--log_dir", type=str, default="dexterous", help="Path to log directory")
     parser.add_argument("--normalize_training_actions", action="store_true", default=False, help="Normalize actions")
+    parser.add_argument("--wandb", type=str, default="online", help="Wandb mode")
+    parser.add_argument("--obs_cond", type=lambda x: x.split(',') if x is not None else None, default=None, help="Observation conditioning")
+    parser.add_argument("--goal_cond", type=lambda x: x.split(',') if x is not None else None, default=None, help="Goal conditioning")
 
     args = parser.parse_args()
 
