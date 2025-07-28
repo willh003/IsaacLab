@@ -61,7 +61,7 @@ import torch
 import traceback
 from collections import OrderedDict
 from torch.utils.data import DataLoader
-
+from tqdm import tqdm   
 import psutil
 import collections
 
@@ -190,8 +190,8 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         ac_dim=shape_meta["ac_dim"],
         device=device,
     )
-    breakpoint()
     # save the config as a json file
+
     with open(os.path.join(log_dir, "..", "config.json"), "w") as outfile:
         json.dump(config, outfile, indent=4)
 
@@ -201,7 +201,6 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
 
     # load training data
     trainset, validset = TrainUtils.load_data_for_training(config, obs_keys=shape_meta["all_obs_keys"])
-    
     
     train_sampler = trainset.get_dataset_sampler()
     print("\n============= Training Dataset =============")
@@ -297,6 +296,8 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     # main training loop
     best_valid_loss = None
     last_ckpt_time = time.time()
+    half_way_ckpt_saved = False
+    half_way_epoch = config.train.num_epochs // 2
 
     # number of learning steps per epoch (defaults to a full dataset pass)
     train_num_steps = config.experiment.epoch_every_n_steps
@@ -319,12 +320,15 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
                 and (epoch > 0)
                 and (epoch % config.experiment.save.every_n_epochs == 0)
             )
+            half_way_check = (epoch >= half_way_epoch) and not half_way_ckpt_saved
+            half_way_ckpt_saved = half_way_check # don't save future half way checkpoints
             epoch_list_check = epoch in config.experiment.save.epochs
-            should_save_ckpt = time_check or epoch_check or epoch_list_check
-        ckpt_reason = None
+            should_save_ckpt = time_check or epoch_check or epoch_list_check or half_way_check
+            ckpt_reason = "time" if time_check else "epoch" if epoch_check else"half" if half_way_check else "epoch_list" if epoch_list_check else None
+        
         if should_save_ckpt:
             last_ckpt_time = time.time()
-            ckpt_reason = "time"
+
 
         print(f"Train Epoch {epoch}")
         print(json.dumps(step_log, sort_keys=True, indent=4))
@@ -362,7 +366,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
                 best_valid_loss = step_log["Loss"]
                 if config.experiment.save.enabled and config.experiment.save.on_best_validation:
                     should_save_ckpt = True
-                    ckpt_reason = "valid" if ckpt_reason is None else ckpt_reason
+                    ckpt_reason = "valid"
 
         # Save model checkpoints based on conditions (success rate, validation loss, etc)
         if should_save_ckpt:
@@ -371,10 +375,10 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
                 config=config,
                 env_meta=env_meta,
                 shape_meta=shape_meta,
-                ckpt_path=os.path.join(ckpt_dir, "ckpt.pth"),
+                ckpt_path=os.path.join(ckpt_dir, f"ckpt_{ckpt_reason}.pth"),
                 obs_normalization_stats=obs_normalization_stats,
             )
-            print("Saved checkpoint to ", os.path.join(ckpt_dir, "ckpt.pth"))
+            print("Saved checkpoint to ", os.path.join(ckpt_dir, f"ckpt_{ckpt_reason}.pth"))
 
         # Finally, log memory usage in MB
         process = psutil.Process(os.getpid())

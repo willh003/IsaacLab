@@ -23,6 +23,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+from cv2.dnn import Net
 import robomimic.utils.file_utils as FileUtils
 import gymnasium as gym
 import os
@@ -34,6 +35,10 @@ from isaaclab.app import AppLauncher
 
 # local imports
 import cli_args  # isort: skip
+
+# Robomimic imports
+# IMPORTANT: do not remove these, because they are required to register the diffusion policy
+from dp import DiffusionPolicyConfig, DiffusionPolicyUNet
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
@@ -105,6 +110,20 @@ def _prepare_observation(policy, ob):
         ob = ObsUtils.normalize_obs(ob, obs_normalization_stats=obs_normalization_stats)
     return ob
 
+def load_action_normalization_params(checkpoint_path):
+    # Go up two directories and into logs/normalization_params.txt
+    exp_dir = os.path.dirname(os.path.dirname(checkpoint_path))
+    norm_file = os.path.join(exp_dir, "logs", "normalization_params.txt")
+    with open(norm_file, "r") as f:
+        lines = f.readlines()
+        min_val = float(lines[0].split(":")[1].strip())
+        max_val = float(lines[1].split(":")[1].strip())
+    return min_val, max_val
+
+def unnormalize_actions(actions, min_val, max_val):
+    # actions: torch.Tensor or np.ndarray in [-1, 1]
+    return 0.5 * (actions + 1) * (max_val - min_val) + min_val
+
 def main():
     """Play with RSL-RL agent."""
     task_name = args_cli.task.split(":")[-1]
@@ -124,6 +143,23 @@ def main():
     print(f"[INFO]: Loading model checkpoint from: {checkpoint_path}")
     policy, _ = FileUtils.policy_from_checkpoint(ckpt_path=checkpoint_path, device=args_cli.device, verbose=True)
 
+    # Count parameters in the policy
+    def count_parameters(model):
+        """Count the total number of parameters in a PyTorch model."""
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        return total_params, trainable_params
+    
+
+    # If it's a diffusion policy, also count parameters in the noise prediction network
+    if hasattr(policy.policy, 'nets') and 'policy' in policy.policy.nets:
+
+        # For diffusion policy, count the UNet parameters
+        net = policy.policy.nets
+        net_total,net_trainable = count_parameters(net)
+        print(f"[INFO]: policy parameters - Total: {net_total:,}, Trainable: {net_trainable:,}")
+
+    breakpoint()
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
@@ -148,19 +184,34 @@ def main():
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
 
-    # Run policy
+    if "obs_encoder" in policy.policy.nets['policy']: 
+        # robomimic dp implementation
+        is_dp = True
+        obs_keys = list(policy.policy.nets['policy']['obs_encoder'].nets['obs'].obs_nets.keys())
+        goal_keys = list(policy.policy.nets['policy']['obs_encoder'].nets['goal'].obs_nets.keys())
+    else: 
+        # robomimic bc implementation
+        is_dp = False
+        obs_keys = list(policy.policy.nets['policy'].nets["encoder"].nets['obs'].obs_nets.keys())
+        goal_keys = list(policy.policy.nets['policy'].nets["encoder"].nets['goal'].obs_nets.keys())
     
-    obs_keys = list(policy.policy.nets['policy'].nets["encoder"].nets['obs'].obs_nets.keys())
-    goal_keys = list(policy.policy.nets['policy'].nets["encoder"].nets['goal'].obs_nets.keys())
 
-    
     policy.start_episode()
-
+    env.reset()
     obs, _ = env.get_observations()
+    device = policy.policy.device  # ensure buffers are on the correct device
+    
+    # Initialize action normalization params
+    if is_dp:
+        action_norm_params = load_action_normalization_params(checkpoint_path)
 
     n_steps = 0
     finished = False
     rewards = np.array([])
+
+    prev_consecutive_success = np.zeros(args_cli.num_envs)
+    total_consecutive_success = np.zeros(args_cli.num_envs)
+    prev_command_counter = np.zeros(args_cli.num_envs)
 
     while simulation_app.is_running() and not finished:
         for i in tqdm(range(args_cli.n_steps // args_cli.num_envs)):
@@ -169,19 +220,43 @@ def main():
             obs_dict = {}
             goal_dict = {}
             for key in obs_keys:
-                obs_dict[key] = obs[:, OBS_INDICES[key][0]:OBS_INDICES[key][1]]
+                current = torch.tensor(obs[:, OBS_INDICES[key][0]:OBS_INDICES[key][1]], dtype=torch.float32, device=device)
+                obs_dict[key] = current
             for key in goal_keys:
-                goal_dict[key] = obs[:, GOAL_INDICES[key][0]:GOAL_INDICES[key][1]]
-            # Compute actions
-            obs = _prepare_observation(policy, obs_dict)
-            goal = _prepare_observation(policy, goal_dict)
+                current = torch.tensor(obs[:, GOAL_INDICES[key][0]:GOAL_INDICES[key][1]], dtype=torch.float32, device=device)
+                goal_dict[key] = current
 
             # Apply actions
             with torch.inference_mode():
                 actions = policy.policy.get_action(obs_dict=obs_dict, goal_dict=goal_dict)
+
+                if is_dp:
+                    min_val, max_val = action_norm_params
+                    actions = unnormalize_actions(actions, min_val, max_val)
+
                 obs, rew, dones, extras = env.step(actions)
 
             rewards = np.concatenate([rewards, rew.cpu().numpy()])
+
+            # Count number of resets (success or timeout)
+            command_term = env.unwrapped.command_manager.get_term("object_pose")
+            new_consecutive_success = command_term.metrics["consecutive_success"].cpu().numpy()
+            delta_consecutive_success = new_consecutive_success - prev_consecutive_success
+            delta_consecutive_success[delta_consecutive_success < 0] = 0 # if the goal was reset, we don't want to count it as a success
+            total_consecutive_success += delta_consecutive_success
+            prev_consecutive_success = new_consecutive_success
+            
+            if is_dp:
+                command_term = env.unwrapped.command_manager.get_term("object_pose")
+                command_counter = command_term.command_counter.cpu().numpy()
+
+                # Check if the counter increased (indicating a goal change)
+                goal_resets = command_counter > prev_command_counter
+
+                if any(goal_resets):
+                    policy.policy.reset() # reset the policy buffers
+                
+                prev_command_counter = command_counter
 
             # Record trajectory
             traj["actions"].append(actions.tolist())
@@ -192,7 +267,8 @@ def main():
         # After the loop, print the mean
         print(f"Mean reward: {np.mean(rewards):.2f} over {n_steps} steps")
         dones = rewards > 1
-        print(f"Number of episodes finished: {dones.sum()}")
+        print(f"Number of episodes finished by reward: {dones.sum()}")
+        print(f"Number of episodes finished total (including timeout): {total_consecutive_success.sum()} over {n_steps} steps")
 
         finished = True
         # close the simulator

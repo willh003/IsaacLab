@@ -62,8 +62,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # set up different observation groups for @MIMO_MLP
         observation_group_shapes = OrderedDict()
         observation_group_shapes["obs"] = OrderedDict(self.obs_shapes)
+        observation_group_shapes["goal"] = OrderedDict(self.goal_shapes)
+
+
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
-        
         obs_encoder = ObsNets.ObservationGroupEncoder(
             observation_group_shapes=observation_group_shapes,
             encoder_kwargs=encoder_kwargs,
@@ -124,6 +126,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
         self.action_check_done = False
         self.obs_queue = None
         self.action_queue = None
+        self.goal_queue = None
     
     def process_batch_for_training(self, batch):
         """
@@ -144,7 +147,12 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
         input_batch = dict()
         input_batch["obs"] = {k: batch["obs"][k][:, :To, :] for k in batch["obs"]}
-        input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
+
+        if "goal_obs" in batch:
+            input_batch["goal_obs"] = {k: batch["goal_obs"][k][:, :To, :] for k in batch["goal_obs"]}
+        else:
+            input_batch["goal_obs"] = None
+
         input_batch["actions"] = batch["actions"][:, :Tp, :]
         
         # check if actions are normalized to [-1,1]
@@ -194,7 +202,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
             for k in self.obs_shapes:
                 # first two dimensions should be [B, T] for inputs
                 assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])
-            
+
             obs_features = TensorUtils.time_distributed(inputs, self.nets["policy"]["obs_encoder"], inputs_as_kwargs=True)
             assert obs_features.ndim == 3  # [B, T, D]
 
@@ -272,8 +280,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
         Ta = self.algo_config.horizon.action_horizon
         obs_queue = deque(maxlen=To)
         action_queue = deque(maxlen=Ta)
+        goal_queue = deque(maxlen=To)
         self.obs_queue = obs_queue
         self.action_queue = action_queue
+        self.goal_queue = goal_queue
     
     def get_action(self, obs_dict, goal_dict=None):
         """
@@ -290,33 +300,40 @@ class DiffusionPolicyUNet(PolicyAlgo):
         To = self.algo_config.horizon.observation_horizon
         Ta = self.algo_config.horizon.action_horizon
 
-        # TODO: obs_queue already handled by frame_stack
         # make sure we have at least To observations in obs_queue
         # if not enough, repeat
         # if already full, append one to the obs_queue
-        # n_repeats = max(To - len(self.obs_queue), 1)
-        # self.obs_queue.extend([obs_dict] * n_repeats)
-        
+        n_repeats = max(To - len(self.obs_queue), 1)
+        self.obs_queue.extend([obs_dict] * n_repeats)
+        if goal_dict is not None:
+            self.goal_queue.extend([goal_dict] * n_repeats)
         if len(self.action_queue) == 0:
             # no actions left, run inference
-            # turn obs_queue into dict of tensors (concat at T dim)
-            # import pdb; pdb.set_trace()
-            # obs_dict_list = TensorUtils.list_of_flat_dict_to_dict_of_list(list(self.obs_queue))
-            # obs_dict_tensor = dict((k, torch.cat(v, dim=0).unsqueeze(0)) for k,v in obs_dict_list.items())
-            
+            # turn obs_queue into dict of tensors
+            obs_dict_list = TensorUtils.list_of_flat_dict_to_dict_of_list(list(self.obs_queue))
+            obs_dict_tensor = dict((k, torch.stack(v, dim=1)) for k,v in obs_dict_list.items())
+            goal_dict_list = TensorUtils.list_of_flat_dict_to_dict_of_list(list(self.goal_queue))
+            goal_dict_tensor = dict((k, torch.stack(v, dim=1)) for k,v in goal_dict_list.items())
+
             # run inference
-            # [1,T,Da]
-            action_sequence = self._get_action_trajectory(obs_dict=obs_dict)
+            # [B,T,Da]
+            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor, goal_dict=goal_dict_tensor)
             
-            # put actions into the queue
-            self.action_queue.extend(action_sequence[0])
+            # [B,T,Da] -> [T,B,Da]
+            action_sequence = action_sequence.permute(1,0,2)
+
+            # put T actions into the queue
+            self.action_queue.extend(action_sequence)
         
         # has action, execute from left to right
         # [Da]
         action = self.action_queue.popleft()
         
-        # [1,Da]
-        action = action.unsqueeze(0)
+        
+        if action.ndim == 1: # if not batched
+            action = action.unsqueeze(0)
+        
+        # [B, Da]
         return action
         
     def _get_action_trajectory(self, obs_dict, goal_dict=None):
@@ -350,7 +367,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
         obs_features = TensorUtils.time_distributed(inputs, nets["policy"]["obs_encoder"], inputs_as_kwargs=True)
         assert obs_features.ndim == 3  # [B, T, D]
         B = obs_features.shape[0]
-
         # reshape observation to (B,obs_horizon*obs_dim)
         obs_cond = obs_features.flatten(start_dim=1)
 
@@ -381,6 +397,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
         start = To - 1
         end = start + Ta
         action = naction[:,start:end]
+
         return action
 
     def serialize(self):

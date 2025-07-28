@@ -152,6 +152,9 @@ def main():
     # reset environment
     obs, _ = env.get_observations()
     finished = False
+
+    prev_consecutive_success = np.zeros(args_cli.num_envs)
+    total_consecutive_success = np.zeros(args_cli.num_envs)
     # simulate environment
     while simulation_app.is_running() and not finished:
         with tqdm(range(args_cli.n_steps // args_cli.num_envs)) as pbar:
@@ -168,18 +171,27 @@ def main():
 
                 n_steps += len(actions)  # increment all envs' episode lengths
 
+                # Get the command term for the object pose
+                command_term = env.unwrapped.command_manager.get_term("object_pose")
+
+                # Count number of resets (success or timeout)
+                new_consecutive_success = command_term.metrics["consecutive_success"].cpu().numpy()
+                delta_consecutive_success = new_consecutive_success - prev_consecutive_success
+                delta_consecutive_success[delta_consecutive_success < 0] = 0 # if the goal was reset, we don't want to count it as a success
+                total_consecutive_success += delta_consecutive_success
+                prev_consecutive_success = new_consecutive_success
+                
                 # time delay for real-time evaluation
                 sleep_time = dt - (time.time() - start_time)
                 if args_cli.real_time and sleep_time > 0:
                     time.sleep(sleep_time)
-            
+
                 pbar.set_description(f"Mean reward: {rew.mean().item():.2f}, max reward: {rew.max().item():.2f}")
 
         # After the loop, print the mean
         print(f"Mean reward: {np.mean(rewards):.2f} over {n_steps} steps")
         dones = rewards > 1
-        print(f"Number of episodes finished: {dones.sum()}")
-
+        print(f"Number of episodes finished total (including timeout): {total_consecutive_success.sum()} over {n_steps} steps ")
         finished = True
 
      

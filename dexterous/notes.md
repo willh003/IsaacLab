@@ -11,6 +11,12 @@ isaaclab train_il.py --task=Isaac-Repose-Cube-Allegro-v0 --dataset=/home/will/Is
 collect lots of data:
 isaaclab collect_rollouts.py --checkpoint /home/will/IsaacLab/dexterous/logs/rsl_rl/allegro_cube/2025-07-22_11-08-30/model_4999.pt --task=Isaac-Repose-Cube-Allegro-v0 --output=/home/will/IsaacLab/dexterous/data/allegro_inhand_100k.hdf5 --num_steps 100000 --num_envs 256 --headless
 
+play il:
+isaaclab play_il.py --task=Isaac-Repose-Cube-Allegro-v0 --n_steps 10000 --num_envs 8 --video --video_length 500 --checkpoint /home/will/IsaacLab/dexterous/logs/dexterous/Isaac-Repose-Cube-Allegro-v0/test/20250728105327/models/ckpt.pth --headless
+
+play rl:
+isaaclab play_rl.py --task=Isaac-Repose-Cube-Allegro-v0 --n_steps 10000 --num_envs 8 --video --video_length 500 --checkpoint /home/will/IsaacLab/dexterous/logs/rsl_rl/allegro_cube/2025-07-22_11-08-30/model_4999.pt --headless
+
 
 python interpreter:
 /home/will/isaac-sim/kit/python/bin/python3

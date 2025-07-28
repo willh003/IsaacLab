@@ -104,6 +104,37 @@ class HDF5DatasetFileHandler(DatasetFileHandlerBase):
     Operations.
     """
 
+    def add_mask_field(self, mask_name: str, demo_keys: list[str]):
+        """Add a mask field (e.g., train/test split) to the dataset.
+
+        Args:
+            mask_name: Name of the mask (e.g., 'train', 'test').
+            demo_keys: List of demo keys (e.g., ['demo_0', 'demo_1', ...]) to include in this mask.
+        """
+        import h5py  # ensure h5py is imported for type checking
+        self._raise_if_not_initialized()
+        root_group = self._hdf5_file_stream
+        # Defensive: ensure root_group is a valid h5py.Group or File
+        if root_group is None or not hasattr(root_group, "keys"):
+            raise RuntimeError("HDF5 file stream is not a valid group or file.")
+        # Create or get the 'mask' group
+        if "mask" not in root_group.keys():
+            mask_group = root_group.create_group("mask")
+        else:
+            mask_group = root_group["mask"]
+        # Defensive: ensure mask_group is a valid h5py.Group
+        if not isinstance(mask_group, h5py.Group):
+            raise RuntimeError("'mask' group is not a valid HDF5 group.")
+        # If the dataset already exists, delete it first
+        if mask_name in mask_group.keys():
+            if isinstance(mask_group[mask_name], h5py.Dataset):
+                del mask_group[mask_name]
+            else:
+                raise RuntimeError(f"'{mask_name}' in 'mask' group is not a dataset and cannot be deleted.")
+        # Store the demo keys as fixed-length ASCII strings
+        dt = h5py.string_dtype(encoding="ascii", length=max(len(k) for k in demo_keys) if demo_keys else 1)
+        mask_group.create_dataset(mask_name, data=np.array(demo_keys, dtype=dt))
+
     def load_episode(self, episode_name: str, device: str) -> EpisodeData | None:
         """Load episode data from the file."""
         self._raise_if_not_initialized()
