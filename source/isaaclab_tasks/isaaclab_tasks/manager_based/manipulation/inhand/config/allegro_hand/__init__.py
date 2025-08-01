@@ -30,6 +30,23 @@ gym.register(
     },
 )
 
+
+
+gym.register(
+    id="Isaac-Repose-Cube-Leap-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.leap_env_cfg:LeapCubeEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LeapCubePPORunnerCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
+        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
+    },
+)
+
 gym.register(
     id="Isaac-Repose-Cube-Allegro-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

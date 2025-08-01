@@ -5,6 +5,25 @@ import shutil
 
 import robomimic
 
+def load_action_normalization_params(checkpoint_path):
+    # Go up two directories and into logs/normalization_params.txt
+    exp_dir = os.path.dirname(os.path.dirname(checkpoint_path))
+    norm_file = os.path.join(exp_dir, "logs", "normalization_params.txt")
+    with open(norm_file, "r") as f:
+        lines = f.readlines()
+        min_val = float(lines[0].split(":")[1].strip())
+        max_val = float(lines[1].split(":")[1].strip())
+    return min_val, max_val
+
+def unnormalize_actions(actions, min_val, max_val):
+    # actions: torch.Tensor or np.ndarray in [-1, 1]
+    return 0.5 * (actions + 1) * (max_val - min_val) + min_val
+
+def count_parameters(model):
+    """Count the total number of parameters in a PyTorch model."""
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total_params, trainable_params
 
 def get_exp_dir(output_dir, experiment_name, save_enabled=True):
     """

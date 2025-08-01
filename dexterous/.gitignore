@@ -1,5 +1,7 @@
 logs/
-outputs/
+*logs/
+*outputs/
+*__pycache__*
 wandb/
 data/
 .pretrained_checkpoints/

@@ -38,7 +38,8 @@ import cli_args  # isort: skip
 
 # Robomimic imports
 # IMPORTANT: do not remove these, because they are required to register the diffusion policy
-from dp import DiffusionPolicyConfig, DiffusionPolicyUNet
+from dexterous.dp.dp import DiffusionPolicyConfig, DiffusionPolicyUNet
+from dexterous.dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
@@ -88,41 +89,6 @@ import robomimic.utils.obs_utils as ObsUtils
 
 import numpy as np
 
-# PLACEHOLDER: Extension template (do not remove this comment)
-def _prepare_observation(policy, ob):
-    """
-    Prepare raw observation dict from environment for policy.
-
-    Args:
-        ob (dict): single observation dictionary from environment (no batch dimension, 
-            and np.array values for each key)
-    """
-    
-    ob = TensorUtils.to_tensor(ob)
-    ob = TensorUtils.to_device(ob, policy.policy.device)
-    ob = TensorUtils.to_float(ob)
-
-    if policy.obs_normalization_stats is not None:
-        # ensure obs_normalization_stats are torch Tensor
-        # on proper device
-        obs_normalization_stats = TensorUtils.to_float(TensorUtils.to_device(TensorUtils.to_tensor(policy.obs_normalization_stats), policy.policy.device))
-        # limit normalization to obs keys being used, in case environment includes extra keys
-        ob = ObsUtils.normalize_obs(ob, obs_normalization_stats=obs_normalization_stats)
-    return ob
-
-def load_action_normalization_params(checkpoint_path):
-    # Go up two directories and into logs/normalization_params.txt
-    exp_dir = os.path.dirname(os.path.dirname(checkpoint_path))
-    norm_file = os.path.join(exp_dir, "logs", "normalization_params.txt")
-    with open(norm_file, "r") as f:
-        lines = f.readlines()
-        min_val = float(lines[0].split(":")[1].strip())
-        max_val = float(lines[1].split(":")[1].strip())
-    return min_val, max_val
-
-def unnormalize_actions(actions, min_val, max_val):
-    # actions: torch.Tensor or np.ndarray in [-1, 1]
-    return 0.5 * (actions + 1) * (max_val - min_val) + min_val
 
 def main():
     """Play with RSL-RL agent."""
@@ -143,13 +109,6 @@ def main():
     print(f"[INFO]: Loading model checkpoint from: {checkpoint_path}")
     policy, _ = FileUtils.policy_from_checkpoint(ckpt_path=checkpoint_path, device=args_cli.device, verbose=True)
 
-    # Count parameters in the policy
-    def count_parameters(model):
-        """Count the total number of parameters in a PyTorch model."""
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        return total_params, trainable_params
-    
 
     # If it's a diffusion policy, also count parameters in the noise prediction network
     if hasattr(policy.policy, 'nets') and 'policy' in policy.policy.nets:
@@ -159,7 +118,6 @@ def main():
         net_total,net_trainable = count_parameters(net)
         print(f"[INFO]: policy parameters - Total: {net_total:,}, Trainable: {net_trainable:,}")
 
-    breakpoint()
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
 
@@ -180,7 +138,7 @@ def main():
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    # wrap around environment for rsl-rl
+   # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
 
 

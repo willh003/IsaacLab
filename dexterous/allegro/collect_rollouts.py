@@ -13,11 +13,12 @@ import torch
 from tqdm import tqdm
 from isaaclab.app import AppLauncher
 import cli_args  # isort: skip
-
+import numpy as np
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Collect (state, action) rollouts from a trained RL policy.")
 parser.add_argument("--num_steps", type=int, default=10000, help="Number of steps to collect.")
+parser.add_argument("--num_rollouts", type=int, default=None, help="Number of episodes to collect (alternative to num_steps).")
 parser.add_argument("--train_split", type=float, default=.8, help="Percent of steps to use for training.")
 parser.add_argument("--output", type=str, default="rollouts.hdf5", help="Output HDF5 file for the dataset.")
 parser.add_argument("--num_envs", type=int, default=8, help="Number of environments to simulate.")
@@ -85,50 +86,99 @@ def main():
 
     num_envs = args_cli.num_envs
     num_steps = args_cli.num_steps
-    steps_per_env = num_steps // num_envs
-
-    episodes = [EpisodeData() for _ in range(num_envs)]
-    obs, _ = env.get_observations()
+    num_rollouts = args_cli.num_rollouts
     dt = env.unwrapped.step_dt
     step_count = 0
 
-
-
-    print(f"[INFO] Collecting {num_steps} steps of (state, action) data with {num_envs} envs...")
+    # Track episodes for each environment
+    all_episodes = []  # List to store all completed episodes
+    current_episodes = [EpisodeData() for _ in range(num_envs)]  # Current episodes for each env
+    episode_step_counts = [0 for _ in range(num_envs)]  # Track steps in current episode
     
-    with tqdm(total=num_steps, desc="Collecting rollouts") as pbar:
-        while simulation_app.is_running() and step_count < num_steps:
+    # Track goal completion
+    prev_command_counter = np.zeros(num_envs)
+    
+    obs, _ = env.get_observations()
+
+    # Determine termination condition
+    use_rollout_mode = num_rollouts is not None
+    if use_rollout_mode:
+        print(f"[INFO] Collecting {num_rollouts} episodes with {num_envs} envs...")
+        print(f"[INFO] Episodes will terminate when goals are reached.")
+        pbar_total = num_rollouts
+        pbar_desc = "Collecting episodes"
+    else:
+        print(f"[INFO] Collecting {num_steps} steps of (state, action) data with {num_envs} envs...")
+        print(f"[INFO] Episodes will terminate when goals are reached.")
+        pbar_total = num_steps
+        pbar_desc = "Collecting rollouts"
+    
+    with tqdm(total=pbar_total, desc=pbar_desc) as pbar:
+        while simulation_app.is_running():
             start_time = time.time()
             with torch.inference_mode():
                 actions = policy(obs)
-                # Add each env's data to its own episode, saving each observation component under obs/
+                
+                # Add each env's data to its current episode
                 for i in range(num_envs):
                     for key, (start, end) in OBS_INDICES.items():
-                        episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
+                        current_episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
                         
                     for key, (start, end) in GOAL_INDICES.items():
-                        episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
+                        current_episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
                     
-                    episodes[i].add("actions", actions[i].cpu())
+                    current_episodes[i].add("actions", actions[i].cpu())
+                    episode_step_counts[i] += 1
                     
                 obs, _, _, _ = env.step(actions)
+                
+                # Check for goal completion
+                command_term = env.unwrapped.command_manager.get_term("object_pose")
+                command_counter = command_term.command_counter.cpu().numpy()
+                
+                # Check if any goals were reached (command counter increased)
+                goal_reached = command_counter > prev_command_counter
+                
+                # For environments where goal was reached, finalize current episode and start new one
+                episodes_completed_this_step = 0
+                for i in range(num_envs):
+                    if goal_reached[i] and episode_step_counts[i] > 10: # only finalize if the episode has at least 10 steps
+                        # Finalize current episode if it has data
+                        if episode_step_counts[i] > 0:
+                            all_episodes.append(current_episodes[i])
+                            episodes_completed_this_step += 1
+                            print(f"[INFO] Completed episode for env {i} with {episode_step_counts[i]} steps")
+                        
+                        # Start new episode for this environment
+                        current_episodes[i] = EpisodeData()
+                        episode_step_counts[i] = 0
+                
+                prev_command_counter = command_counter.copy()
+                
             step_count += num_envs
+
+            # Update progress bar based on mode
+            if use_rollout_mode:
+                pbar.update(episodes_completed_this_step)
+                if len(all_episodes) >= num_rollouts:
+                    break
+            else:
+                pbar.update(num_envs)
+                if step_count >= num_steps:
+                    break
 
             # time delay for real-time evaluation
             sleep_time = dt - (time.time() - start_time)
             if args_cli.real_time and sleep_time > 0:
                 time.sleep(sleep_time)
-            if step_count >= num_steps:
-                break
-            
-            pbar.update(step_count)
-            
-    # Write each environment's episode as a separate demo (robomimic-compatible)
-    for ep in episodes:
+    
+    
+    # Write all episodes as separate demos (robomimic-compatible)
+    for ep in all_episodes:
         handler.write_episode(ep)
     
     # split into train and test by adding a field {mask/train: [demo0, demo1, ...]} and another field {mask/test: [demo0, demo1, ...]}
-    num_episodes = len(episodes)
+    num_episodes = len(all_episodes)
     split_idx = int(args_cli.train_split * num_episodes)
     demo_keys = [f"demo_{i}" for i in range(num_episodes)]
     train_demo_keys = demo_keys[:split_idx]
@@ -142,7 +192,7 @@ def main():
     handler.close()
 
 
-    print(f"[INFO] Done. Saved {step_count} samples to {args_cli.output}.")
+    print(f"[INFO] Done. Saved {len(all_episodes)} episodes with {step_count} total steps (average {step_count/len(all_episodes)} steps per episode) to {args_cli.output}.")
     env.close()
 
 

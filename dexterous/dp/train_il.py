@@ -90,6 +90,7 @@ app_launcher = AppLauncher(headless=True)
 simulation_app = app_launcher.app
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
+
 import wandb
 
 def normalize_hdf5_actions(config: Config, log_dir: str) -> str:
@@ -296,8 +297,6 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     # main training loop
     best_valid_loss = None
     last_ckpt_time = time.time()
-    half_way_ckpt_saved = False
-    half_way_epoch = config.train.num_epochs // 2
 
     # number of learning steps per epoch (defaults to a full dataset pass)
     train_num_steps = config.experiment.epoch_every_n_steps
@@ -320,11 +319,9 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
                 and (epoch > 0)
                 and (epoch % config.experiment.save.every_n_epochs == 0)
             )
-            half_way_check = (epoch >= half_way_epoch) and not half_way_ckpt_saved
-            half_way_ckpt_saved = half_way_check # don't save future half way checkpoints
             epoch_list_check = epoch in config.experiment.save.epochs
-            should_save_ckpt = time_check or epoch_check or epoch_list_check or half_way_check
-            ckpt_reason = "time" if time_check else "epoch" if epoch_check else"half" if half_way_check else "epoch_list" if epoch_list_check else None
+            should_save_ckpt = time_check or epoch_check or epoch_list_check
+            ckpt_reason = "time" if time_check else "epoch" if epoch_check else "epoch_list" if epoch_list_check else None
         
         if should_save_ckpt:
             last_ckpt_time = time.time()
@@ -378,7 +375,6 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
                 ckpt_path=os.path.join(ckpt_dir, f"ckpt_{ckpt_reason}.pth"),
                 obs_normalization_stats=obs_normalization_stats,
             )
-            print("Saved checkpoint to ", os.path.join(ckpt_dir, f"ckpt_{ckpt_reason}.pth"))
 
         # Finally, log memory usage in MB
         process = psutil.Process(os.getpid())
@@ -491,8 +487,8 @@ if __name__ == "__main__":
 
     parser.add_argument("--task", type=str, default=None, help="Name of the task.")
     parser.add_argument("--algo", type=str, default=None, help="Name of the algorithm.")
-    parser.add_argument("--log_dir", type=str, default="dexterous", help="Path to log directory")
-    parser.add_argument("--normalize_training_actions", action="store_true", default=False, help="Normalize actions")
+    parser.add_argument("--log_dir", type=str, default="/home/will/IsaacLab/dexterous/logs/dexterous", help="Path to log directory")
+    parser.add_argument("--normalize_training_actions", action="store_true", default=True, help="Normalize actions")
     parser.add_argument("--wandb", type=str, default="online", help="Wandb mode")
     parser.add_argument("--obs_cond", type=lambda x: x.split(',') if x is not None else None, default=None, help="Observation conditioning")
     parser.add_argument("--goal_cond", type=lambda x: x.split(',') if x is not None else None, default=None, help="Goal conditioning")

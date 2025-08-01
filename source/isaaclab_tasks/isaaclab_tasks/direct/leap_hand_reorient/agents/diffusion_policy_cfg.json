@@ -133,23 +133,17 @@
         "modalities": {
             "obs": {
                 "low_dim": [
-                    "robot0_joint_pos",
-                    "robot0_joint_vel",
+                    "joint_pos",
+                    "action_targets",
                     "object_pos",
-                    "object_quat",
-                    "object_lin_vel",
-                    "object_ang_vel",
-                    "last_action"
+                    "object_rot"
                 ],
                 "rgb": [],
                 "depth": [],
                 "scan": []
             },
             "goal": {
-                "low_dim": [
-                    "goal_pose",
-                    "goal_quat_diff"
-                ],
+                "low_dim": [],
                 "rgb": [],
                 "depth": [],
                 "scan": []

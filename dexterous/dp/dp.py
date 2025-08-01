@@ -62,7 +62,9 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # set up different observation groups for @MIMO_MLP
         observation_group_shapes = OrderedDict()
         observation_group_shapes["obs"] = OrderedDict(self.obs_shapes)
-        observation_group_shapes["goal"] = OrderedDict(self.goal_shapes)
+
+        # TODO: super hacky by will to aviod goal shape error
+        #observation_group_shapes["goal"] = OrderedDict(self.goal_shapes)
 
 
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
