@@ -1,0 +1,1 @@
+UWLAB_CLOUD_ASSETS_DIR="https://uwlab-assets.s3.us-west-004.backblazeb2.com"

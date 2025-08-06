@@ -3,11 +3,13 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-from cv2.dnn import Net
 import robomimic.utils.file_utils as FileUtils
 import gymnasium as gym
 import os
 import time
+from collections import deque
+import matplotlib.pyplot as plt
+from isaaclab.utils.math import quat_from_euler_xyz
 import torch
 import yaml
 import numpy as np
@@ -21,10 +23,12 @@ from utils import count_parameters, load_action_normalization_params, unnormaliz
 from robomimic.algo import RolloutPolicy
 import sys
 import os
+from utils import detect_z_rotation_direction_batch
 
 # TODO: hacky way to import get_state_from_env_leap
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from leap.utils import get_state_from_env as get_state_from_env_leap
+
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play an IL policy")
@@ -37,6 +41,8 @@ parser.add_argument(
 parser.add_argument("--num_envs", type=int, default=8, help="Number of environments to simulate.")
 parser.add_argument("--n_steps", type=int, default=None, help="Number of steps to run.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
+parser.add_argument("--goal_z", type=float, default=None, help="Goal z rotation.")
+
 #parser.add_argument("--checkpoint", type=str, default=None, help="Path to the rl policy checkpoint.")
 parser.add_argument(
     "--use_pretrained_checkpoint",
@@ -68,6 +74,7 @@ def get_clip_params(agent_cfg):
     clip_actions = agent_cfg["params"]["env"]["clip_actions"]
     clip_obs = agent_cfg["params"]["env"]["clip_observations"]
     return clip_actions, clip_obs
+
 
 
 
@@ -142,13 +149,44 @@ def main():
     finished = False
     rewards = np.array([])
 
+    goal_zs = np.arange(-2*np.pi, 2*np.pi, args_cli.goal_z)
+
+    z_idx = 0
+    buf_len = 50
+    quat_buffer = deque(maxlen=50)
+    cc_scores = []
+
     while simulation_app.is_running() and not finished:
 
         if "leap" in args_cli.task.lower():
             obs_dict = get_state_from_env_leap(env.unwrapped, obs)
-            goal_dict = None
+            
+            if args_cli.goal_z is not None:
+                num_envs = env_cfg.scene.num_envs
+                goal_rot = quat_from_euler_xyz(torch.zeros(num_envs), torch.zeros(num_envs), torch.ones(num_envs) * goal_zs[z_idx]).to(rl_device)
+                goal_dict = {"object_rot": goal_rot}
+                
+            else:
+                goal_dict = None
         else:
             raise NotImplementedError(f"Task {args_cli.task} not implemented")
+
+        # quat_buffer.append(obs_dict["object_rot"])
+        # if len(quat_buffer) == quat_buffer.maxlen:
+        #     quaternions = torch.stack(list(quat_buffer), dim=0)
+
+        #     z_rot_direction = detect_z_rotation_direction_batch(quaternions)
+        #     cc_percent = (z_rot_direction == 1).float().mean()
+        #     print(f"Counterclockwise percent: {cc_percent:.2f} for goal {goal_zs[z_idx]} with quat {goal_dict['object_rot'][0]}")
+        #     z_idx = z_idx + 1
+        #     quat_buffer.clear()
+        #     cc_scores.append(cc_percent.item())
+        #     # Reset environment with inference mode disabled
+        #     obs = env.reset()
+        #     policy.start_episode()
+        #     if z_idx >= len(goal_zs):
+        #         finished = True
+        #     continue  # Skip the rest of the loop iteration to avoid using stale obs_dict
 
         # Apply actions
         with torch.inference_mode():
@@ -157,7 +195,9 @@ def main():
                 min_val, max_val = action_norm_params
                 actions = unnormalize_actions(actions, min_val, max_val)
 
-            obs, rew, dones, extras = env.step(actions)
+        obs, rew, dones, extras = env.step(actions)
+
+            
 
         rewards = np.concatenate([rewards, rew.cpu().numpy()])
 
@@ -169,7 +209,8 @@ def main():
     
     print(f"Mean reward: {np.mean(rewards):.2f} over {n_steps} steps")
 
-    
+    plt.plot(goal_zs, cc_scores)
+    plt.savefig("cc_scores.png")
     env.close()
 
 

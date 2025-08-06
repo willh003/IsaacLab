@@ -38,8 +38,10 @@ import cli_args  # isort: skip
 
 # Robomimic imports
 # IMPORTANT: do not remove these, because they are required to register the diffusion policy
-from dexterous.dp.dp import DiffusionPolicyConfig, DiffusionPolicyUNet
-from dexterous.dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from dp.dp import DiffusionPolicyConfig, DiffusionPolicyUNet
+from dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")

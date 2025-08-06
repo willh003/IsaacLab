@@ -7,7 +7,7 @@ clockwise env: Isaac-Reorient-Cube-Clockwise-Leap
 
 # Play leap hand rl:
 
-isaaclab play_rl.py --task Isaac-Reorient-Cube-Leap --checkpoint /home/will/LEAP_Hand_Isaac_Lab/logs/rl_games/leap_hand_reorient/pretrained/nn/leap_hand_reorient.pth --num_envs 8 --headless
+isaaclab play_rsl_rl.py --task Isaac-Reorient-Cube-Leap --checkpoint /home/will/LEAP_Hand_Isaac_Lab/logs/rl_games/leap_hand_reorient/pretrained/nn/leap_hand_reorient.pth --num_envs 8 --headless
 
 # Collect rollouts:
 

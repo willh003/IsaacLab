@@ -4,6 +4,37 @@ import datetime
 import shutil
 
 import robomimic
+import torch
+
+def detect_z_rotation_direction_batch(quaternions):
+    """
+    Determine rotation direction about z-axis for multiple environments.
+    
+    Args:
+        quaternions: torch.Tensor of shape (n_steps, n_envs, 4)
+    
+    Returns:
+        torch.Tensor of shape (n_envs) with 1 for CCW, -1 for CW, 0 for no rotation
+    """
+    # Stack deque into tensor: (n_observations, n_envs, 4)
+    
+    # Normalize quaternions
+    q = quaternions / torch.norm(quaternions, dim=2, keepdim=True)
+    
+    # Compute derivatives
+    q_dot = q[1:] - q[:-1]  # (n_obs-1, n_envs, 4)
+    
+    # Quaternion conjugate
+    q_conj = torch.cat([q[:-1, :, :1], -q[:-1, :, 1:]], dim=2)
+    
+    # Vectorized quaternion multiplication for omega_z
+    w1, x1, y1, z1 = q_dot.unbind(dim=2)
+    w2, x2, y2, z2 = q_conj.unbind(dim=2)
+    
+    omega_z = 2 * (w1*z2 + x1*y2 - y1*x2 + z1*w2)
+    mean_omega_z = omega_z.mean(dim=0)  # (n_envs,)
+    
+    return torch.sign(mean_omega_z)
 
 def load_action_normalization_params(checkpoint_path):
     # Go up two directories and into logs/normalization_params.txt

@@ -39,8 +39,8 @@ class AllegroCubePPORunnerCfg(RslRlOnPolicyRunnerCfg):
 @configclass
 class LeapCubePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 24
-    max_iterations = 5000
-    save_interval = 50
+    max_iterations = 20000
+    save_interval = 500
     experiment_name = "leap_cube"
     empirical_normalization = True
     policy = RslRlPpoActorCriticCfg(

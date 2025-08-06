@@ -47,6 +47,7 @@ This file has been modified from the original robomimic version to integrate wit
 
 # Standard library imports
 import argparse
+from re import S
 
 # Third-party imports
 import gymnasium as gym
@@ -68,7 +69,8 @@ import collections
 # Robomimic imports
 # IMPORTANT: do not remove these, because they are required to register the diffusion policy
 from dp import DiffusionPolicyConfig, DiffusionPolicyUNet
-from utils import get_exp_dir
+from utils import get_exp_dir, detect_z_rotation_direction_batch
+from isaaclab.utils.math import euler_xyz_from_quat
 
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.file_utils as FileUtils
@@ -202,7 +204,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
 
     # load training data
     trainset, validset = TrainUtils.load_data_for_training(config, obs_keys=shape_meta["all_obs_keys"])
-    
+
     train_sampler = trainset.get_dataset_sampler()
     print("\n============= Training Dataset =============")
     print(trainset)
@@ -219,30 +221,39 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         batch_out = collections.defaultdict(list)
         for item in batch:
             for k, v in item.items():
-                if k == 'obs':
-                    batch_out['obs'].append(v)
-                else:
                     batch_out[k].append(v)
+        
         # Stack non-obs keys (convert numpy to tensor if needed)
         for k in batch_out:
-            if k != 'obs':
+            if k != 'obs' and k != 'goal_obs':
                 batch_out[k] = [torch.from_numpy(x) if isinstance(x, np.ndarray) else x for x in batch_out[k]]
                 batch_out[k] = torch.stack(batch_out[k], dim=0)
-        # Now collate obs keys
-        obs_keys = batch_out['obs'][0].keys()
-        obs_dict = {k: [] for k in obs_keys}
-        for obs in batch_out['obs']:
-            for k in obs_keys:
-                obs_dict[k].append(obs[k])
-        # Stack obs keys (convert numpy to tensor if needed)
-        for k in obs_dict:
-            obs_dict[k] = [torch.from_numpy(x) if isinstance(x, np.ndarray) else x for x in obs_dict[k]]
-            obs_dict[k] = torch.stack(obs_dict[k], dim=0)
-        # Extract goal keys
-        goal_obs = {k: v for k, v in obs_dict.items() if 'goal' in k}
-        obs_no_goal = {k: v for k, v in obs_dict.items() if 'goal' not in k}
-        batch_out['obs'] = obs_no_goal
-        batch_out['goal_obs'] = goal_obs
+        
+        # Helper function to collate observation dictionaries
+        def collate_obs_dict(obs_list):
+            """Collate a list of observation dictionaries into a batched dictionary."""
+            if not obs_list:
+                return {}
+            
+            obs_keys = obs_list[0].keys()
+            obs_dict = {k: [] for k in obs_keys}
+            
+            # Collect all values for each key
+            for obs in obs_list:
+                for k in obs_keys:
+                    obs_dict[k].append(obs[k])
+            
+            # Stack obs keys (convert numpy to tensor if needed)
+            for k in obs_dict:
+                obs_dict[k] = [torch.from_numpy(x) if isinstance(x, np.ndarray) else x for x in obs_dict[k]]
+                obs_dict[k] = torch.stack(obs_dict[k], dim=0)
+            
+            return obs_dict
+        
+        # Collate obs and goal_obs using the helper function
+        batch_out['obs'] = collate_obs_dict(batch_out['obs'])
+        batch_out['goal_obs'] = collate_obs_dict(batch_out['goal_obs'])
+        
         return batch_out
 
     # initialize data loaders
@@ -271,6 +282,59 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         )
     else:
         valid_loader = None
+
+
+    def test_train_loader():
+        import matplotlib.pyplot as plt
+
+        cc = []
+        cw = []
+
+        cc_y = []
+        cw_y = []
+
+        for j in range(10): 
+            for i, batch in enumerate(train_loader):
+                object_rot = batch["obs"]["object_rot"]
+                goal_rot = batch["goal_obs"]["object_rot"]
+
+
+                r, p, y = euler_xyz_from_quat(goal_rot)
+                y = y.cpu().numpy()
+
+                z_rot_direction = detect_z_rotation_direction_batch(object_rot.permute(1, 0, 2)).cpu().numpy()
+
+                cc.extend(goal_rot.cpu().numpy()[z_rot_direction == 1])
+                cw.extend(goal_rot.cpu().numpy()[z_rot_direction == -1])
+
+                cc_y.extend(y[z_rot_direction == 1])
+                cw_y.extend(y[z_rot_direction == -1])
+
+        cc = np.array(cc)
+        cw = np.array(cw)
+
+
+        plt.scatter(cw[:,0], cw[:,-1], label="CW", color="blue", s=.2, alpha=0.3)
+        plt.scatter(cc[:,0], cc[:,-1], label="CCW", color="red", s=.8, alpha=1)
+
+        plt.xlabel("w quaternion")
+        plt.ylabel("z quaternion")
+        plt.legend()
+        plt.savefig("goal_rot.png")
+        plt.close()
+        plt.clf()
+        plt.hist(cc[:, -1], label="CCW", color="red", alpha=0.5)
+        plt.hist(cw[:, -1], label="CW", color="blue", alpha=0.5)
+        plt.savefig("goal_rot_hist.png")
+
+        plt.xlabel("z theta")
+        plt.close()
+        plt.clf()
+
+        print(f"saved figure with {len(cc)} CCW and {len(cw)} CW")
+
+    
+    #test_train_loader()
 
     # Monkey-patch wandb.save to avoid uploading large files
     original_save = wandb.save
@@ -423,6 +487,7 @@ def main(args: argparse.Namespace):
         print(" ")
         ext_cfg = load_cfg_from_registry(args.task, cfg_entry_point_key)
         config = config_factory(ext_cfg["algo_name"])
+
         filtered_ext_cfg = filter_config_dict(ext_cfg, config)
         with config.values_unlocked():
             config.update(filtered_ext_cfg)

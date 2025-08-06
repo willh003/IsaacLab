@@ -144,8 +144,11 @@ def main():
         policy_nn, normalizer=ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.onnx"
     )
 
-    dt = env.unwrapped.step_dt
+    #dt = env.unwrapped.step_dt
+    dt = 1/16
+
     ep_len = 0
+
     rewards = np.array([])
     n_steps = 0
 

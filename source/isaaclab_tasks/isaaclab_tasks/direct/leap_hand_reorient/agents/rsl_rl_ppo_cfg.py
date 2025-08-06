@@ -12,8 +12,8 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlPpoActorCriticRecurr
 class LeapHandPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     seed = 42
     num_steps_per_env = 32
-    max_iterations = 5000
-    save_interval = 200
+    max_iterations = 20000
+    save_interval = 1000
     experiment_name = "leap_hand_reorient"
     device = "cuda:0"
     empirical_normalization = True

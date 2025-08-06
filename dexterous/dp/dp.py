@@ -61,10 +61,13 @@ class DiffusionPolicyUNet(PolicyAlgo):
         """
         # set up different observation groups for @MIMO_MLP
         observation_group_shapes = OrderedDict()
+
+        # merge obs and goal shapes into observation_group_shapes["obs"]
         observation_group_shapes["obs"] = OrderedDict(self.obs_shapes)
 
-        # TODO: super hacky by will to aviod goal shape error
-        #observation_group_shapes["goal"] = OrderedDict(self.goal_shapes)
+        # TODO: super hacky by @will to aviod goal shape error
+        if len(self.goal_shapes) > 0:
+            observation_group_shapes["goal"] = OrderedDict(self.goal_shapes)
 
 
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
@@ -151,7 +154,15 @@ class DiffusionPolicyUNet(PolicyAlgo):
         input_batch["obs"] = {k: batch["obs"][k][:, :To, :] for k in batch["obs"]}
 
         if "goal_obs" in batch:
-            input_batch["goal_obs"] = {k: batch["goal_obs"][k][:, :To, :] for k in batch["goal_obs"]}
+            input_batch["goal_obs"] = dict()
+            for k in batch["goal_obs"]:
+                if batch["goal_obs"][k].ndim == 2:
+                    # repeat goal obs to match frame stacking if only one goal provided
+                    input_batch["goal_obs"][k] = batch["goal_obs"][k][:, None, :].repeat(1, To, 1)
+                else:
+                    # if goal obs is already stacked, just take the first To frames
+                    input_batch["goal_obs"][k] = batch["goal_obs"][k][:, :To, :]
+
         else:
             input_batch["goal_obs"] = None
 
@@ -516,6 +527,7 @@ class DiffusionPolicyConfig(BaseConfig):
         # set compatible data loading parameters
         self.train.seq_length = 16 # should match self.algo.horizon.prediction_horizon
         self.train.frame_stack = 2 # should match self.algo.horizon.observation_horizon
+        self.train.goal_relabel = False # should match self.algo.goal_relabel
     
     def algo_config(self):
         """

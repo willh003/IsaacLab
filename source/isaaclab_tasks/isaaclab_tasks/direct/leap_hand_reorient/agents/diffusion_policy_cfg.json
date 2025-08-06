@@ -65,7 +65,7 @@
                 "normalization": null
             }
         },
-        "goal_mode": null,
+        "goal_mode":"relabel",
         "cuda": true,
         "batch_size": 100,
         "num_epochs": 10000,
@@ -91,7 +91,7 @@
             }
         },
         "horizon": {
-            "observation_horizon": 2,
+            "observation_horizon": 1,
             "action_horizon": 4,
             "prediction_horizon": 8
         },
@@ -134,7 +134,6 @@
             "obs": {
                 "low_dim": [
                     "joint_pos",
-                    "action_targets",
                     "object_pos",
                     "object_rot"
                 ],
@@ -143,7 +142,7 @@
                 "scan": []
             },
             "goal": {
-                "low_dim": [],
+                "low_dim": ["object_rot"],
                 "rgb": [],
                 "depth": [],
                 "scan": []
