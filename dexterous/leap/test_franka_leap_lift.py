@@ -17,6 +17,9 @@ parser = argparse.ArgumentParser(description="Test Franka-LEAP lift environment.
 parser.add_argument("--num_envs", type=int, default=16, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Isaac-Lift-Cube-Franka-Leap-v0", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
+parser.add_argument("--video_length", type=int, default=200, help="Length of video to record (in steps)")
+parser.add_argument("--video", action="store_true", help="Whether to record a video")
+
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -49,18 +52,28 @@ def main():
     env_cfg.seed = args_cli.seed
     
     # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg)
+    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
+    
+    if args_cli.video:
+        print(f"[INFO] Recording video of length {args_cli.video_length} steps")
+        # wrap with video recorder
+        video_kwargs = {
+            "video_folder": "videos",
+            "name_prefix": "franka_leap_lift",
+            "episode_trigger": lambda episode_id: episode_id == 0,  # record first episode
+            "video_length": args_cli.video_length,
+        }
+        env = gym.wrappers.RecordVideo(env, **video_kwargs)
     
     print(f"[INFO] Environment created successfully!")
     print(f"[INFO] Action space: {env.action_space}")
     print(f"[INFO] Observation space: {env.observation_space}")
-    print(f"[INFO] Device: {env.device}")
+    #print(f"[INFO] Device: {env.device}")
     
     # reset environment
     print("[INFO] Resetting environment...")
     obs, _ = env.reset(seed=args_cli.seed)
-    print(f"[INFO] Reset successful! Observation shape: {obs.shape}")
-    
+    print(f"[INFO] Reset successful! Observation keys: {obs.keys()}")
     # run a few steps to verify everything works
     print("[INFO] Running test steps...")
     step = 0
@@ -68,6 +81,7 @@ def main():
         step += 1
         # sample random actions
         actions = env.action_space.sample()
+        actions = torch.from_numpy(actions).to(env.unwrapped.device)
         
         # step the environment
         obs, reward, terminated, truncated, info = env.step(actions)
