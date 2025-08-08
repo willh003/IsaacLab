@@ -1,10 +1,10 @@
 
-run allegro rl training:
-isaaclab train_rl.py --task=Isaac-Repose-Cube-Allegro-v0 --headless --video
+run leap reorient rl training:
+isaaclab train_rsl_rl.py --task=Isaac-Repose-Cube-Leap-v0 --headless --video
 
+run leap+frank rl training:
+isaaclab train_rsl_rl.py --task=Isaac-Lift-Cube-Franka-Leap-v0 --headless --video
 
-run allegro leap training:
-isaaclab train_rl.py --task=Isaac-Repose-Cube-Leap-v0 --headless --video
 
 Good checkpoint (rsl_rl, manager based):
 /home/will/IsaacLab/dexterous/logs/rsl_rl/allegro_cube/2025-07-22_11-08-30/model_4999.pt

@@ -88,8 +88,8 @@ class ActionsCfg:
     """Action specifications for the MDP."""
 
     # will be set by agent env cfg
-    arm_action: mdp.JointPositionActionCfg | mdp.DifferentialInverseKinematicsActionCfg = MISSING
-    gripper_action: mdp.BinaryJointPositionActionCfg = MISSING
+    arm_action: mdp.JointPositionActionCfg | mdp.DifferentialInverseKinematicsActionCfg | mdp.EMAJointPositionToLimitsActionCfg = MISSING
+    gripper_action: mdp.BinaryJointPositionActionCfg | mdp.EMAJointPositionToLimitsActionCfg = MISSING
 
 
 @configclass
@@ -135,6 +135,7 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
+    
     reaching_object = RewTerm(func=mdp.object_ee_distance, params={"std": 0.1}, weight=1.0)
 
     lifting_object = RewTerm(func=mdp.object_is_lifted, params={"minimal_height": 0.04}, weight=15.0)

@@ -25,9 +25,11 @@ from .franka import FRANKA_PANDA_CFG
 # Create a new configuration that extends the base Franka config
 FRANKA_PANDA_LEAP_CFG = FRANKA_PANDA_CFG.copy()
 
-# Update the spawn configuration to use a custom USD path
-# You'll need to create this USD file that combines Franka arm + LEAP hand
-FRANKA_PANDA_LEAP_CFG.spawn.usd_path = f"{Path(__file__).parent}/franka_leap_combined/franka_leap_robot_final.usd"
+# Update the spawn configuration to use the fixed USD path
+FRANKA_PANDA_LEAP_CFG.spawn.usd_path = f"{Path(__file__).parent.parent.parent}/data/franka_leap_right/franka_leap_flattened_noart.usda"
+FRANKA_PANDA_LEAP_CFG.spawn.usd_path_relative = "/franka_leap_robot_custom"
+# Enable contact sensors for fingertip contact detection
+FRANKA_PANDA_LEAP_CFG.spawn.activate_contact_sensors = True
 
 # Update the initial joint positions - include Franka arm and LEAP hand joints
 FRANKA_PANDA_LEAP_CFG.init_state.joint_pos = {
@@ -40,10 +42,10 @@ FRANKA_PANDA_LEAP_CFG.init_state.joint_pos = {
     "panda_joint6": 3.037,
     "panda_joint7": 0.741,
     # LEAP hand joints (16 actuated joints)
-    "a_0": 0.0, "a_1": 0.5, "a_2": 0.0, "a_3": 0.0,
-    "a_4": -0.75, "a_5": 1.3, "a_6": 0.0, "a_7": 0.75,
-    "a_8": 1.75, "a_9": 1.5, "a_10": 1.75, "a_11": 1.75,
-    "a_12": 0.0, "a_13": 1.0, "a_14": 0.0, "a_15": 0.0,
+    "a_0": 0.0, "a_1": 0.0, "a_2": 0.0, "a_3": 0.0,
+    "a_4": 0.0, "a_5": 0.0, "a_6": 0.0, "a_7": 0.0,
+    "a_8": 0.0, "a_9": 0.0, "a_10": 0.0, "a_11": 0.0,
+    "a_12": 0.0, "a_13": 0.0, "a_14": 0.0, "a_15": 0.0,
 }
 
 # Update the actuators configuration - include Franka arm and LEAP hand
@@ -76,6 +78,7 @@ FRANKA_PANDA_LEAP_CFG.actuators = {
 # Create a high PD control version
 FRANKA_PANDA_LEAP_HIGH_PD_CFG = FRANKA_PANDA_LEAP_CFG.copy()
 FRANKA_PANDA_LEAP_HIGH_PD_CFG.spawn.rigid_props.disable_gravity = True
+# Contact sensors are already enabled from the base config
 FRANKA_PANDA_LEAP_HIGH_PD_CFG.actuators["panda_shoulder"].stiffness = 400.0
 FRANKA_PANDA_LEAP_HIGH_PD_CFG.actuators["panda_shoulder"].damping = 80.0
 FRANKA_PANDA_LEAP_HIGH_PD_CFG.actuators["panda_forearm"].stiffness = 400.0

@@ -6,7 +6,7 @@
 import torch
 
 from isaaclab.assets import RigidObjectCfg
-from isaaclab.sensors import FrameTransformerCfg
+from isaaclab.sensors import FrameTransformerCfg, ContactSensorCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
@@ -22,7 +22,6 @@ from isaaclab.managers import SceneEntityCfg
 # Update curriculum to match the new reward term names
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
            
-# Action penalty functions now defined in mdp.rewards for consistency between configs
 
 ##
 # Pre-defined configs
@@ -32,34 +31,30 @@ from isaaclab_assets.robots.franka import FRANKA_PANDA_CFG  # isort: skip
 from isaaclab_assets.robots.franka_leap import FRANKA_PANDA_LEAP_CFG  # isort: skip
 
 @configclass
-class FrankaLeapCubeLiftEnvCfg(LiftEnvCfg):
+class FrankaLeapCubeLiftComprehensiveEnvCfg(LiftEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
 
         # Set Franka as robot
-        #self.scene.robot = FRANKA_PANDA_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
         self.scene.robot = FRANKA_PANDA_LEAP_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
         # Set actions for the specific robot type (franka with leap hand)
-        # self.actions.arm_action = mdp.JointPositionActionCfg(
-        #     asset_name="robot", joint_names=["panda_joint.*"], scale=0.5, use_default_offset=True
-        # )
-        self.actions.arm_action = mdp.EMAJointPositionToLimitsActionCfg(
+        # Use relative/delta position control for arm
+        self.actions.arm_action = mdp.RelativeJointPositionActionCfg(
             asset_name="robot",
             joint_names=["panda_joint.*"],
-            alpha=0.95,
-            rescale_to_limits=True,
+            scale=0.5,  # Scale factor for delta movements
+            use_zero_offset=True,  # Ignore asset-defined offsets
         )
 
-        # LEAP hand uses 16 actuated joints (a_0 to a_15)
+        # LEAP hand uses absolute position control (EMA for smoothness)
         self.actions.gripper_action = mdp.EMAJointPositionToLimitsActionCfg(
             asset_name="robot",
             joint_names=["a_.*"],
             alpha=0.95,
             rescale_to_limits=True,
         )
-
 
         # Set the body name for the end effector (LEAP hand base integrated in panda_hand)
         self.commands.object_pose.body_name = "base"
@@ -91,35 +86,77 @@ class FrankaLeapCubeLiftEnvCfg(LiftEnvCfg):
             ),
         )
 
-        # # Remove the generic penalties and replace with separate arm/hand penalties
+        # Replace all existing reward components with separated comprehensive manipulation rewards
+        # Remove existing rewards
+        delattr(self.rewards, 'reaching_object')
+        delattr(self.rewards, 'lifting_object')
+        delattr(self.rewards, 'object_goal_tracking')
+        delattr(self.rewards, 'object_goal_tracking_fine_grained')
         delattr(self.rewards, 'action_rate')
         delattr(self.rewards, 'joint_vel')
         
-        # Replace the end-effector reaching reward with fingertip-based reaching
-        delattr(self.rewards, 'reaching_object')
+        # Use exact same reward structure as original config, but contact-conditional
+        # 1. Reaching reward (identical to original)
         self.rewards.reaching_object = RewTerm(
-            func=mdp.object_fingertip_distance, 
-            params={"std": 0.1}, 
+            func=mdp.object_fingertip_distance,
+            params={"std": 0.1},
             weight=1.0
         )
         
-        # Custom action penalties using joint indices (since mdp functions don't support asset filtering)
-        # Arm actions are indices 0-6 (7 joints), Hand actions are indices 7-22 (16 joints)
+        # 2. Lifting reward (same as original but contact-conditional)
+        self.rewards.lifting_object = RewTerm(
+            func=mdp.object_is_lifted_contact_conditional,
+            params={
+                "minimal_height": 0.04,
+                "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
+                "min_contacts": 2,
+            },
+            weight=1.0  # Exact same weight as original
+        )
         
-        # Separate action rate penalties for arm vs hand  
+        # 3. Goal tracking reward (same as original but contact-conditional)
+        self.rewards.object_goal_tracking = RewTerm(
+            func=mdp.object_goal_distance_contact_conditional,
+            params={
+                "std": 0.3, 
+                "minimal_height": 0.04, 
+                "command_name": "object_pose",
+                "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
+                "min_contacts": 2,
+            },
+            weight=16.0  # Exact same weight as original
+        )
+        
+        # 4. Fine-grained goal tracking (same as original but contact-conditional)
+        self.rewards.object_goal_tracking_fine_grained = RewTerm(
+            func=mdp.object_goal_distance_contact_conditional,
+            params={
+                "std": 0.05,
+                "minimal_height": 0.04, 
+                "command_name": "object_pose",
+                "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
+                "min_contacts": 2,
+            },
+            weight=5.0  # Exact same weight as original
+        )
+        
+        # 5. Action penalties (match original penalty structure)
+        # Arm action rate penalty
         self.rewards.action_rate_arm = RewTerm(
-            func=mdp.action_rate_l2_arm, 
-            weight=-1e-4,  # conservative penalty for arm
-        )
-        self.rewards.action_rate_hand = RewTerm(
-            func=mdp.action_rate_l2_hand, 
-            weight=-0.01,  # higher penalty for dexterous hand (like working LEAP task)
+            func=mdp.action_rate_l2_arm,
+            weight=-1e-4  # Match original arm action rate penalty
         )
         
-        # Action L2 penalty for LEAP hand only (like working LEAP task)
+        # Hand action rate penalty (stronger)
+        self.rewards.action_rate_hand = RewTerm(
+            func=mdp.action_rate_l2_hand,
+            weight=-0.01  # Match original hand action rate penalty
+        )
+        
+        # Hand L2 action penalty
         self.rewards.action_l2_hand = RewTerm(
-            func=mdp.action_l2_hand, 
-            weight=-0.0001,
+            func=mdp.action_l2_hand,
+            weight=-0.0001  # Match original hand L2 penalty
         )
         
         # Severe penalty for dropping the object
@@ -129,44 +166,24 @@ class FrankaLeapCubeLiftEnvCfg(LiftEnvCfg):
             weight=1.0,  # Already includes -10.0 penalty in function
         )
         
-        # Goal tracking rewards (higher weights for better goal reaching)
-        self.rewards.object_goal_tracking = RewTerm(
-            func=mdp.object_goal_distance,
-            params={"std": 0.3, "minimal_height": 0.04, "command_name": "object_pose"},
-            weight=25.0,  # Increased from 16.0 for better goal tracking
-        )
-        self.rewards.object_goal_tracking_fine_grained = RewTerm(
-            func=mdp.object_goal_distance,
-            params={"std": 0.05, "minimal_height": 0.04, "command_name": "object_pose"},
-            weight=10.0,  # Increased from 5.0 for better goal tracking
-        )
-        
-        # Separate joint velocity penalties for arm vs hand  
+        # Joint velocity penalties
         self.rewards.joint_vel_arm = RewTerm(
             func=mdp.joint_vel_l2,
             weight=-1e-4,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint.*"])},
         )
+        
         self.rewards.joint_vel_hand = RewTerm(
             func=mdp.joint_vel_l2,
-            weight=-2.5e-5,  # lighter penalty for dexterous hand movement
+            weight=-2.5e-5,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=["a_.*"])},
         )
-        
-        # Wrist rotation penalty to prevent reward hacking (panda_joint7 is the wrist)
-        # self.rewards.wrist_rotation_penalty = RewTerm(
-        #     func=mdp.joint_vel_l2,
-        #     weight=-0.001,  # Higher penalty for wrist rotation
-        #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint7"])},
-        # )
 
-
-        # Remove the old curriculum terms that reference non-existent rewards
+        # Remove the old curriculum terms and add new ones to match original
         delattr(self.curriculum, 'action_rate')
         delattr(self.curriculum, 'joint_vel')
         
-        # Add curriculum for the new separate terms
-        # Curriculum only for arm, not hand
+        # Add curriculum matching original config
         self.curriculum.action_rate_arm = CurrTerm(
             func=mdp.modify_reward_weight, 
             params={"term_name": "action_rate_arm", "weight": -1e-1, "num_steps": 10000}
@@ -175,8 +192,6 @@ class FrankaLeapCubeLiftEnvCfg(LiftEnvCfg):
             func=mdp.modify_reward_weight, 
             params={"term_name": "joint_vel_arm", "weight": -1e-1, "num_steps": 10000}
         )
-
-
 
         # Listens to the required transforms
         marker_cfg = FRAME_MARKER_CFG.copy()
@@ -196,10 +211,18 @@ class FrankaLeapCubeLiftEnvCfg(LiftEnvCfg):
                 ),
             ],
         )
+        
+        # Contact sensor for fingertip-object contact detection (only fingertips)
+        self.scene.contact_forces = ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/panda/panda_hand/leap_right/(thumb_fingertip|fingertip|fingertip_2|fingertip_3)",
+            history_length=6,
+            force_threshold=1.0,  # Threshold for detecting contact (1N)
+            filter_prim_paths_expr=["{ENV_REGEX_NS}/Object"],  # Only track contacts with the object
+        )
 
 
 @configclass
-class FrankaLeapCubeLiftEnvCfg_PLAY(FrankaLeapCubeLiftEnvCfg):
+class FrankaLeapCubeLiftComprehensiveEnvCfg_PLAY(FrankaLeapCubeLiftComprehensiveEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()

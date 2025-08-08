@@ -14,6 +14,12 @@
 **/*.usdc
 **/*.usdz
 
+# Exception: Allow USD files in isaaclab_assets/data for debugging
+!source/isaaclab_assets/data/**/*.usd
+!source/isaaclab_assets/data/**/*.usda
+!source/isaaclab_assets/data/**/*.usdc
+!source/isaaclab_assets/data/**/*.usdz
+
 # Python
 .DS_Store
 **/*.egg-info/
@@ -33,6 +39,7 @@ docker/.container.cfg
 # Don't ignore the top-level .vscode directory as it is
 # used to configure VS Code settings
 !.vscode
+CLAUDE.md
 
 # Outputs
 **/output/*
