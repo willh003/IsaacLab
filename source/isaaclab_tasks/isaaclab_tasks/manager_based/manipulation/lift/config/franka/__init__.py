@@ -52,10 +52,33 @@ gym.register(
 )
 
 gym.register(
-    id="Isaac-Lift-Cube-Franka-Leap-Comprehensive-v0",
+    id="Isaac-Lift-Cube-Franka-Table-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.joint_pos_env_leap_comprehensive_cfg:FrankaLeapCubeLiftComprehensiveEnvCfg",
+        "env_cfg_entry_point": f"{__name__}.joint_pos_env_table:FrankaCubeLiftTableEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LiftCubePPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Isaac-Lift-Cube-Franka-Leap-Table-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.joint_pos_env_leap_table_cfg:FrankaLeapCubeTableEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LeapLiftCubePPORunnerCfg"
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Isaac-Lift-Cube-Franka-Leap-Table-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.joint_pos_env_leap_table_cfg:FrankaLeapCubeTableEnvCfg_PLAY",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LeapLiftCubePPORunnerCfg"
     },
     disable_env_checker=True,
@@ -93,6 +116,36 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.ik_rel_env_cfg:FrankaCubeLiftEnvCfg",
         "robomimic_bc_cfg_entry_point": os.path.join(agents.__path__[0], "robomimic/bc.json"),
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Isaac-Lift-Cube-Franka-Leap-Table-IK-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.ik_rel_env_leap_table_cfg:FrankaLeapCubeTableIKEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LeapLiftCubePPORunnerCfg"
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Isaac-Lift-Cube-Franka-Leap-Table-IK-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.ik_rel_env_leap_table_cfg:FrankaLeapCubeTableIKEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LeapLiftCubePPORunnerCfg"
+    },
+    disable_env_checker=True,
+)
+
+gym.register(
+    id="Isaac-Dexpoint-Table-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.table_dexpoint_cfg:TableDexpointEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:DexpointPPORunnerCfg"
     },
     disable_env_checker=True,
 )

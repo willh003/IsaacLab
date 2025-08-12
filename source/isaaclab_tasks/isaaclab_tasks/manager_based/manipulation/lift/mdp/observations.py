@@ -64,17 +64,12 @@ def fingertip_positions_in_robot_root_frame(
     # Get fingertip positions in world frame
     fingertip_pos_w = []
     for link_name in fingertip_links:
-        try:
-            # Get link index
-            link_idx = robot.find_bodies(link_name)[0][0]
-            # Get position in world frame
-            pos_w = robot.data.body_pos_w[:, link_idx, :3]
-            fingertip_pos_w.append(pos_w)
-        except:
-            # If link not found, use a default position (hand base)
-            hand_base_idx = robot.find_bodies("base")[0][0] 
-            pos_w = robot.data.body_pos_w[:, hand_base_idx, :3]
-            fingertip_pos_w.append(pos_w)
+        # Get link index
+        link_idx = robot.find_bodies(link_name)[0][0]
+        # Get position in world frame
+        pos_w = robot.data.body_pos_w[:, link_idx, :3]
+        fingertip_pos_w.append(pos_w)
+
     
     # Stack all fingertip positions: (num_envs, 4, 3)
     fingertip_pos_w = torch.stack(fingertip_pos_w, dim=1)

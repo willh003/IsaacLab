@@ -7,6 +7,12 @@
 
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
+# Import action configurations
+from isaaclab.envs.mdp.actions.actions_cfg import (
+    RelativeJointPositionActionCfg,
+    EMAJointPositionToLimitsActionCfg,
+)
+
 from .observations import *  # noqa: F401, F403
 from .rewards import *  # noqa: F401, F403
 from .terminations import *  # noqa: F401, F403

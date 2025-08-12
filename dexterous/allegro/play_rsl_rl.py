@@ -25,7 +25,7 @@ parser.add_argument(
 )
 parser.add_argument("--num_envs", type=int, default=8, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
-parser.add_argument("--n_steps", type=int, default=1000, help="Number of steps to run.")
+parser.add_argument("--n_steps", type=int, default=100000, help="Number of steps to run.")
 parser.add_argument(
     "--use_pretrained_checkpoint",
     action="store_true",
@@ -178,11 +178,11 @@ def main():
                 command_term = env.unwrapped.command_manager.get_term("object_pose")
 
                 # Count number of resets (success or timeout)
-                new_consecutive_success = command_term.metrics["consecutive_success"].cpu().numpy()
-                delta_consecutive_success = new_consecutive_success - prev_consecutive_success
-                delta_consecutive_success[delta_consecutive_success < 0] = 0 # if the goal was reset, we don't want to count it as a success
-                total_consecutive_success += delta_consecutive_success
-                prev_consecutive_success = new_consecutive_success
+                # new_consecutive_success = command_term.metrics["consecutive_success"].cpu().numpy()
+                # delta_consecutive_success = new_consecutive_success - prev_consecutive_success
+                # delta_consecutive_success[delta_consecutive_success < 0] = 0 # if the goal was reset, we don't want to count it as a success
+                # total_consecutive_success += delta_consecutive_success
+                # prev_consecutive_success = new_consecutive_success
                 
                 # time delay for real-time evaluation
                 sleep_time = dt - (time.time() - start_time)
