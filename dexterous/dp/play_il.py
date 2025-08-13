@@ -28,6 +28,7 @@ from utils import detect_z_rotation_direction_batch
 # TODO: hacky way to import get_state_from_env_leap
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from leap.utils import get_state_from_env as get_state_from_env_leap
+from allegro.utils import get_state_from_env as get_state_from_env_allegro
 
 
 # add argparse arguments
@@ -70,14 +71,6 @@ from isaaclab_tasks.utils import parse_env_cfg
 from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
 
-def get_clip_params(agent_cfg):
-    clip_actions = agent_cfg["params"]["env"]["clip_actions"]
-    clip_obs = agent_cfg["params"]["env"]["clip_observations"]
-    return clip_actions, clip_obs
-
-
-
-
 def main():
     """Play with RSL-RL agent."""
     
@@ -85,7 +78,6 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
-    agent_cfg = load_cfg_from_registry(args_cli.task, "rl_games_cfg_entry_point")
 
     ############################### POLICY LOADING ############################### 
     # Load policy
@@ -106,8 +98,10 @@ def main():
 
     if "obs_encoder" in policy.policy.nets['policy']: 
         # robomimic dp implementation
+        # Robomimic dps put the goal into the obs_encoder, so no need for separate goal
         is_dp = True
         obs_keys = list(policy.policy.nets['policy']['obs_encoder'].nets['obs'].obs_nets.keys())
+        goal_keys = None
     else: 
         # robomimic bc implementation
         is_dp = False
@@ -135,15 +129,10 @@ def main():
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
-    clip_actions, clip_obs = get_clip_params(agent_cfg)
-    rl_device = args_cli.device
-    # rlgames provides a useful vec env wrapper, but there is no other dependency on it
-    env = RlGamesVecEnvWrapper(env, clip_actions=clip_actions, clip_obs=clip_obs, rl_device=rl_device)
-
 
     ############################### TRAINING LOOP ############################### 
     policy.start_episode() # reset the policy buffers (i.e. prev observations, goals, etc.)
-    obs = env.reset()
+    obs,_ = env.reset()
 
     n_steps = 0
     finished = False
@@ -163,11 +152,14 @@ def main():
             
             if args_cli.goal_z is not None:
                 num_envs = env_cfg.scene.num_envs
-                goal_rot = quat_from_euler_xyz(torch.zeros(num_envs), torch.zeros(num_envs), torch.ones(num_envs) * goal_zs[z_idx]).to(rl_device)
+                goal_rot = quat_from_euler_xyz(torch.zeros(num_envs), torch.zeros(num_envs), torch.ones(num_envs) * goal_zs[z_idx]).to(args_cli.device)
                 goal_dict = {"object_rot": goal_rot}
                 
             else:
                 goal_dict = None
+        elif "allegro" in args_cli.task.lower():
+            obs_dict, goal_dict = get_state_from_env_allegro(obs, obs_keys, goal_keys, device=args_cli.device)
+        
         else:
             raise NotImplementedError(f"Task {args_cli.task} not implemented")
 
@@ -195,9 +187,7 @@ def main():
                 min_val, max_val = action_norm_params
                 actions = unnormalize_actions(actions, min_val, max_val)
 
-        obs, rew, dones, extras = env.step(actions)
-
-            
+        obs, rew, terminated, truncated, extras = env.step(actions)
 
         rewards = np.concatenate([rewards, rew.cpu().numpy()])
 
