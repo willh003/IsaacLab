@@ -50,7 +50,6 @@ import argparse
 from re import S
 
 # Third-party imports
-import gymnasium as gym
 import h5py
 import json
 import numpy as np
@@ -193,8 +192,10 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     print(model)  # print model summary
     print("")
 
+    all_obs_keys = shape_meta["all_obs_keys"]
+
     # load training data
-    trainset, validset = TrainUtils.load_data_for_training(config, obs_keys=shape_meta["all_obs_keys"])
+    trainset, validset = TrainUtils.load_data_for_training(config, obs_keys=all_obs_keys)
 
     train_sampler = trainset.get_dataset_sampler()
     print("\n============= Training Dataset =============")
@@ -289,13 +290,15 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     if config.experiment.validate:
         wandb_cfg["train"]["valid_length"] = len(validset)
     
+
     wandb.init(
         project="dexterous",
         entity="willhu003",
         name=os.path.basename(os.path.dirname(log_dir)), # log dir is under the experiment dir
         config=wandb_cfg,
         dir=log_dir,
-        mode=wandb_mode
+        mode=wandb_mode,
+        tags = ['dp']
     )
 
     # main training loop
@@ -489,7 +492,7 @@ if __name__ == "__main__":
     )
 
     home_dir = Path.home()
-    log_dir = home_dir / "IsaacLab/dexterous/logs/dexterous"
+    log_dir = home_dir / "IsaacLab/dexterous/dp/logs/"
 
     parser.add_argument("--task", type=str, default=None, help="Name of the task.")
     parser.add_argument("--algo", type=str, default=None, help="Name of the algorithm.")

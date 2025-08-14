@@ -41,7 +41,7 @@
         "data": null,
         "output_dir": "../diffusion_policy_trained_models",
         "normalize_weights_by_ds_size": false,
-        "num_data_workers": 12,
+        "num_data_workers": 8,
         "hdf5_cache_mode": "all",
         "hdf5_use_swmr": true,
         "hdf5_load_next_obs": false,
@@ -91,7 +91,7 @@
             }
         },
         "horizon": {
-            "observation_horizon": 2,
+            "observation_horizon": 1,
             "action_horizon": 2,
             "prediction_horizon": 4
         },
@@ -134,14 +134,9 @@
             "obs": {
                 "low_dim": [
                     "robot0_joint_pos",
-                    "robot0_joint_vel",
                     "object_pos",
                     "object_quat",
-                    "object_lin_vel",
-                    "object_ang_vel",
-                    "last_action",
-                    "goal_pose",
-                    "goal_quat_diff"
+                    "goal_pose"                    
                 ],
                 "rgb": [],
                 "depth": [],

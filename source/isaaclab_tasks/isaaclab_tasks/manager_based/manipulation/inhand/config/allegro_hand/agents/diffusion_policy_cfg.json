@@ -139,7 +139,8 @@
                     "object_quat",
                     "object_lin_vel",
                     "object_ang_vel",
-                    "last_action"
+                    "last_action",
+                    "contact_force"
                 ],
                 "rgb": [],
                 "depth": [],
