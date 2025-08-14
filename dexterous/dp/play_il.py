@@ -3,34 +3,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-import robomimic.utils.file_utils as FileUtils
-import gymnasium as gym
-import os
-import time
-from collections import deque
-import matplotlib.pyplot as plt
-from isaaclab.utils.math import quat_from_euler_xyz
-import torch
-import yaml
-import numpy as np
-from tqdm import tqdm
 from isaaclab.app import AppLauncher
-
-# Robomimic imports
-# IMPORTANT: do not remove these, because they are required to register the diffusion policy
-from dp import DiffusionPolicyConfig, DiffusionPolicyUNet
-from utils import count_parameters, load_action_normalization_params, unnormalize_actions
-from robomimic.algo import RolloutPolicy
-import sys
-import os
-from utils import detect_z_rotation_direction_batch
-
-# TODO: hacky way to import get_state_from_env_leap
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from leap.utils import get_state_from_env as get_state_from_env_leap
-from allegro.utils import get_state_from_env as get_state_from_env_allegro
-
-
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play an IL policy")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to the checkpoint file.")
@@ -68,8 +41,37 @@ from isaaclab.utils.dict import print_dict
 from isaaclab_rl.rl_games import RlGamesVecEnvWrapper
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import parse_env_cfg
-from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 
+import robomimic.utils.file_utils as FileUtils
+import gymnasium as gym
+import os
+import time
+from collections import deque
+import matplotlib.pyplot as plt
+from isaaclab.utils.math import quat_from_euler_xyz
+import torch
+import yaml
+import numpy as np
+from tqdm import tqdm
+
+from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
+# Robomimic imports
+# IMPORTANT: do not remove these, because they are required to register the diffusion policy
+from dp_model import DiffusionPolicyConfig, DiffusionPolicyUNet
+from robomimic.algo import RolloutPolicy
+import sys
+import os
+
+# TODO: hacky way to import get_state_from_env_leap
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions
+from leap.utils import get_state_from_env as get_state_from_env_leap
+from allegro.utils import get_state_from_env as get_state_from_env_allegro
+
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.deterministic = False
+torch.backends.cudnn.benchmark = False
 
 def main():
     """Play with RSL-RL agent."""

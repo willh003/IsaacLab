@@ -68,7 +68,7 @@ from pathlib import Path
 
 # Robomimic imports
 # IMPORTANT: do not remove these, because they are required to register the diffusion policy
-from dp import DiffusionPolicyConfig, DiffusionPolicyUNet
+from dp_model import DiffusionPolicyConfig, DiffusionPolicyUNet
 from utils import get_exp_dir, detect_z_rotation_direction_batch
 
 import robomimic.utils.env_utils as EnvUtils
@@ -176,6 +176,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
 
     # setup for a new training run
     data_logger = DataLogger(log_dir, config=config, log_tb=config.experiment.logging.log_tb)
+
     model = algo_factory(
         algo_name=config.algo_name,
         config=config,

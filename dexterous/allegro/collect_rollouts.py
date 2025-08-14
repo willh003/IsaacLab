@@ -16,7 +16,7 @@ import cli_args  # isort: skip
 import numpy as np
 import sys
 import os
-from utils import OBS_INDICES, GOAL_INDICES
+from utils import OBS_INDICES
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Collect (state, action) rollouts from a trained RL policy.")
 parser.add_argument("--num_steps", type=int, default=10000, help="Number of steps to collect.")
@@ -125,9 +125,6 @@ def main():
                     for key, (start, end) in OBS_INDICES.items():
                         current_episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
                         
-                    for key, (start, end) in GOAL_INDICES.items():
-                        current_episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
-                    
                     current_episodes[i].add("actions", actions[i].cpu())
                     episode_step_counts[i] += 1
                     
