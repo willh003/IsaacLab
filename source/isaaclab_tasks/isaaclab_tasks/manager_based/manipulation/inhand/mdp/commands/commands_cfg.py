@@ -12,6 +12,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from .orientation_command import InHandReOrientationCommand
+from .success_count_reset_command import SuccessCountResetCommand
 
 
 @configclass
@@ -65,3 +66,45 @@ class InHandReOrientationCommandCfg(CommandTermCfg):
         },
     )
     """The configuration for the goal pose visualization marker. Defaults to a DexCube marker."""
+
+
+@configclass
+class SuccessCountResetCommandCfg(InHandReOrientationCommandCfg):
+    """Configuration for the success count reset 3D orientation command term.
+
+    This configuration extends the base InHandReOrientationCommandCfg to add success count reset functionality.
+    The command will track consecutive successes and reset both the object/joint state and generate a new goal
+    after reaching a specified number of consecutive successes.
+
+    Please refer to the :class:`SuccessCountResetCommand` class for more details.
+    """
+
+    class_type: type = SuccessCountResetCommand
+
+    successes_before_reset: int = 5
+    """Number of consecutive successes before resetting.
+    
+    After reaching the goal orientation this many times in a row, the environment will automatically
+    reset the object and robot joints and generate a new goal.
+    """
+
+    use_predefined_reset: bool = False
+    """Whether to use a predefined orientation for resets.
+    
+    If True, the command will reset to a specific predefined orientation instead of sampling
+    random orientations. If False, random orientations will be sampled as before.
+    """
+
+    reset_orientation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Predefined Euler angles for resets (roll, pitch, yaw) in radians.
+    
+    This orientation will be used when resetting if use_predefined_reset is True.
+    Default is (0.0, 0.0, 0.0) which represents no rotation.
+    
+    - roll: Rotation around X-axis (left/right tilt)
+    - pitch: Rotation around Y-axis (forward/backward tilt)  
+    - yaw: Rotation around Z-axis (left/right turn)
+    """
+
+    # Disable automatic goal resampling
+    update_goal_on_success: bool = False

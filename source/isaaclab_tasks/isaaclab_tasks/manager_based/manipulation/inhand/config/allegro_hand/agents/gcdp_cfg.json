@@ -139,12 +139,14 @@
                     "object_quat",
                     "object_lin_vel",
                     "object_ang_vel",
-                    "last_action"
+                    "last_action",
+                    "goal_pose",
+                    "goal_quat_diff"
                 ],
                 "rgb": [],
                 "depth": [],
                 "scan": []
-            }
+            }            
         },
         "encoder": {
             "low_dim": {

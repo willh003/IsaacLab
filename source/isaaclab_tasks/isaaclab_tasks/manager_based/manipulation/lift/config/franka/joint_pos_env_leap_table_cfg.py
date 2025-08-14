@@ -45,11 +45,8 @@ class FrankaLeapCubeTableEnvCfg(LiftEnvCfg):
 
         # Set actions for the specific robot type (franka with leap hand)
         # Use relative/delta position control for arm
-        self.actions.arm_action = mdp.RelativeJointPositionActionCfg(
-            asset_name="robot",
-            joint_names=["panda_joint.*"],
-            scale=0.5,  # Scale factor for delta movements
-            use_zero_offset=True,  # Ignore asset-defined offsets
+        self.actions.arm_action = mdp.JointPositionActionCfg(
+            asset_name="robot", joint_names=["panda_joint.*"], scale=0.5, use_default_offset=True
         )
 
         # LEAP hand uses absolute position control (EMA for smoothness)
@@ -60,21 +57,19 @@ class FrankaLeapCubeTableEnvCfg(LiftEnvCfg):
             rescale_to_limits=True,
         )
 
-        # Create custom object pose command configuration
-        self.commands.object_pose = ObjectPoseCommandCfg(
-            asset_name="robot",
-            body_name="base",
-            resampling_time_range=(5.0, 5.0),
-            debug_vis=True,
-            ranges=ObjectPoseCommandCfg.Ranges(
+        # Set the body name for the end effector
+        self.commands.object_pose.body_name = "base"
+
+        ranges = ObjectPoseCommandCfg.Ranges(
                 pos_x=(0.4, 0.6), 
                 pos_y=(-0.25, 0.25), 
                 pos_z=(0.025, 0.025),  # Keep on table surface
                 roll=(0.0, 0.0),      # ±17 degrees
                 pitch=(0.0, 0.0),     # ±17 degrees  
                 yaw=(-torch.pi / 2, torch.pi / 2),       # ±28 degrees
-            ),
-        )
+            )
+        
+        self.commands.object_pose.ranges = ranges
         
         # Override visualization to show object pose instead of robot hand pose
         # Create custom visualization configs for better visibility
@@ -89,11 +84,11 @@ class FrankaLeapCubeTableEnvCfg(LiftEnvCfg):
         self.commands.object_pose.current_pose_visualizer_cfg = current_marker_cfg
 
         # Add new observations for better manipulation awareness
-        from isaaclab.managers import ObservationTermCfg as ObsTerm
-        
+        # from isaaclab.managers import ObservationTermCfg as ObsTerm
+        #
         # Add object orientation (quaternion)
-        self.observations.policy.object_orientation = ObsTerm(func=mdp.object_orientation_in_robot_root_frame)
-        self.observations.policy.fingertip_positions = ObsTerm(func=mdp.fingertip_positions_in_robot_root_frame)
+        # self.observations.1policy.object_orientation = ObsTerm(func=mdp.object_orientation_in_robot_root_frame)
+        # self.observations.policy.fingertip_positions = ObsTerm(func=mdp.fingertip_positions_in_robot_root_frame)
 
         # Set Cube as object
         self.scene.object = RigidObjectCfg(
@@ -101,7 +96,7 @@ class FrankaLeapCubeTableEnvCfg(LiftEnvCfg):
             init_state=RigidObjectCfg.InitialStateCfg(pos=[0.5, 0, 0.055], rot=[1, 0, 0, 0]),
             spawn=UsdFileCfg(
                 usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
-                scale=(1.2, 1.2, 1.2),
+                scale=(1.0,1.0,1.0),
                 rigid_props=RigidBodyPropertiesCfg(
                     solver_position_iteration_count=16,
                     solver_velocity_iteration_count=1,
@@ -128,57 +123,94 @@ class FrankaLeapCubeTableEnvCfg(LiftEnvCfg):
             weight=1.0
         )
         
-        # 2. Contact-based sliding reward (replaces lifting_object)
-        self.rewards.contact_sliding = RewTerm(
-            func=mdp.object_contact_sliding_reward,
-            params={
-                "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
-                "min_contacts": 2,
-                "table_height": 0.055,
-                "contact_bonus": 0.5,
-            },
-            weight=2.0
-        )
+        # # 2. Contact-based sliding reward (replaces lifting_object)
+        # self.rewards.contact_sliding = RewTerm(
+        #     func=mdp.object_contact_sliding_reward,
+        #     params={
+        #         "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
+        #         "min_contacts": 2,
+        #         "table_height": 0.055,
+        #         "contact_bonus": 0.5,
+        #     },
+        #     weight=2.0
+        # )
         
         # 3. Goal tracking reward (position + orientation, contact-conditional, no height requirement)
-        self.rewards.object_goal_tracking = RewTerm(
-            func=mdp.object_goal_distance_unified,
-            params={
-                "std": 0.3, 
-                "command_name": "object_pose",
-                "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
-                "min_contacts": 2,
-                "orientation_weight": 0.5,
-            },
-            weight=16.0
-        )
+        # self.rewards.object_goal_tracking = RewTerm(
+        #     func=mdp.object_goal_distance_unified,
+        #     params={
+        #         "std": 0.3, 
+        #         "command_name": "object_pose",
+        #         "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
+        #         "min_contacts": 2,
+        #         "orientation_weight": 0.5,
+        #     },
+        #     weight=16.0
+        # )
         
         # 4. Fine-grained goal tracking (position + orientation, contact-conditional)
-        self.rewards.object_goal_tracking_fine_grained = RewTerm(
-            func=mdp.object_goal_distance_unified,
-            params={
-                "std": 0.05,
-                "command_name": "object_pose",
-                "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
-                "min_contacts": 2,
-                "orientation_weight": 0.5,
-                "table_height": 0.055,
-                "table_tolerance": 0.02,
-            },
-            weight=5.0
-        )
         
+        # self.rewards.object_goal_tracking = RewTerm(
+        #     func=mdp.object_goal_distance_contact,
+        #     params={
+        #         "std": 0.3,
+        #         "command_name": "object_pose",
+        #         "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
+        #         "min_contacts": 3,
+        #         "orientation_weight": 0.0,
+        #         "minimal_height": 0.04,
+        #     },
+        #     weight=16.0
+        # )
+
+        # self.rewards.object_goal_tracking_fine_grained = RewTerm(
+        #     func=mdp.object_goal_distance_contact,
+        #     params={
+        #         "std": 0.05,
+        #         "command_name": "object_pose",
+        #         "contact_sensor_cfg": SceneEntityCfg("contact_forces"),
+        #         "min_contacts": 3,
+        #         "orientation_weight": 0.0,
+        #         "minimal_height": 0.04,
+        #     },
+        #     weight=5.0
+        # )
+
+        self.rewards.object_goal_tracking = RewTerm(
+            func=mdp.object_goal_distance,
+            params={"std": 0.3, "minimal_height": 0.05, "command_name": "object_pose"},
+            weight=16.0,
+        )
+
+        self.rewards.object_goal_tracking_fine_grained = RewTerm(
+            func=mdp.object_goal_distance,
+            params={"std": 0.05, "minimal_height": 0.05, "command_name": "object_pose"},
+            weight=5.0,
+        )
+
         # 5. Action penalties (match original penalty structure)
         # Arm action rate penalty
         self.rewards.action_rate_arm = RewTerm(
             func=mdp.action_rate_l2_arm,
             weight=-1e-4
         )
-        
+        # Joint velocity penalties
+        self.rewards.joint_vel_arm = RewTerm(
+            func=mdp.joint_vel_l2,
+            weight=-1e-4,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint.*"])},
+        )
+
         # Hand action rate penalty (stronger)
         self.rewards.action_rate_hand = RewTerm(
             func=mdp.action_rate_l2_hand,
             weight=-0.01
+        )
+
+        self.rewards.joint_vel_hand = RewTerm(
+            func=mdp.joint_vel_l2,
+            weight=-2.5e-5,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["a_.*"])},
         )
         
         # Hand L2 action penalty
@@ -195,28 +227,19 @@ class FrankaLeapCubeTableEnvCfg(LiftEnvCfg):
             weight=1.0,  # Already includes -10.0 penalty in function
         )
 
-        # Joint velocity penalties
-        self.rewards.joint_vel_arm = RewTerm(
-            func=mdp.joint_vel_l2,
-            weight=-1e-4,
-            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["panda_joint.*"])},
-        )
+
         
-        self.rewards.joint_vel_hand = RewTerm(
-            func=mdp.joint_vel_l2,
-            weight=-2.5e-5,
-            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["a_.*"])},
-        )
+
 
         # Table contact penalty - penalize fingertips touching the table
-        self.rewards.fingertip_table_contact_penalty = RewTerm(
-            func=undesired_contacts,
-            weight=-2.0,  # Moderate penalty for table contact
-            params={
-                "sensor_cfg": SceneEntityCfg("table_contact_forces"),
-                "threshold": 0.5,  # Same as sensor threshold
-            }
-        )
+        # self.rewards.fingertip_table_contact_penalty = RewTerm(
+        #     func=undesired_contacts,
+        #     weight=-2.0,  # Moderate penalty for table contact
+        #     params={
+        #         "sensor_cfg": SceneEntityCfg("table_contact_forces"),
+        #         "threshold": 0.5,  # Same as sensor threshold
+        #     }
+        # )
 
         # Remove the old curriculum terms and add new ones
         delattr(self.curriculum, 'action_rate')
@@ -231,6 +254,15 @@ class FrankaLeapCubeTableEnvCfg(LiftEnvCfg):
             func=mdp.modify_reward_weight, 
             params={"term_name": "joint_vel_arm", "weight": -1e-1, "num_steps": 10000}
         )
+
+        # self.curriculum.action_l2_hand = CurrTerm(
+        #     func=mdp.modify_reward_weight, 
+        #     params={"term_name": "action_l2_hand", "weight": -0.01, "num_steps": 10000}
+        # )
+        # self.curriculum.action_rate_hand = CurrTerm(
+        #     func=mdp.modify_reward_weight, 
+        #     params={"term_name": "action_rate_hand", "weight": -0.1, "num_steps": 10000}
+        # )
 
         # Listens to the required transforms
         marker_cfg = FRAME_MARKER_CFG.copy()
@@ -260,12 +292,12 @@ class FrankaLeapCubeTableEnvCfg(LiftEnvCfg):
         )
         
         # Contact sensor for detecting fingertip-table contact (unwanted)
-        self.scene.table_contact_forces = ContactSensorCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/panda/panda_hand/leap_right/(thumb_fingertip|fingertip|fingertip_2|fingertip_3)",
-            history_length=3,
-            force_threshold=0.5,  # Lower threshold for table contact detection
-            filter_prim_paths_expr=["{ENV_REGEX_NS}/Table"],  # Only track contacts with the table
-        )
+        # self.scene.table_contact_forces = ContactSensorCfg(
+        #     prim_path="{ENV_REGEX_NS}/Robot/panda/panda_hand/leap_right/(thumb_fingertip|fingertip|fingertip_2|fingertip_3)",
+        #     history_length=3,
+        #     force_threshold=1.0,  # Lower threshold for table contact detection
+        #     filter_prim_paths_expr=["{ENV_REGEX_NS}/Table"],  # Only track contacts with the table
+        # )
 
 
 @configclass

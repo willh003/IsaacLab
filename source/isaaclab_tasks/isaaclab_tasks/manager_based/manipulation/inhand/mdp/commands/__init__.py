@@ -5,5 +5,6 @@
 
 """Sub-module containing command terms for 3D orientation goals."""
 
-from .commands_cfg import InHandReOrientationCommandCfg  # noqa: F401
+from .commands_cfg import InHandReOrientationCommandCfg, SuccessCountResetCommandCfg  # noqa: F401
 from .orientation_command import InHandReOrientationCommand  # noqa: F401
+from .success_count_reset_command import SuccessCountResetCommand  # noqa: F401

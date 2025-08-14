@@ -182,3 +182,91 @@ class reset_joints_within_limits_range(ManagerTermBase):
 
         # set into the physics simulation
         self._asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+
+
+def reset_robot_and_object_on_success_count(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    command_name: str,
+    # robot params
+    robot_asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    position_range: dict[str, tuple[float | None, float | None]] = {".*": [0.2, 0.2]},
+    velocity_range: dict[str, tuple[float | None, float | None]] = {".*": [0.0, 0.0]},
+    use_default_offset: bool = True,
+    operation: Literal["abs", "scale"] = "scale",
+    # object params  
+    object_asset_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+    pose_range: dict[str, tuple[float, float]] = {"x": [-0.01, 0.01], "y": [-0.01, 0.01], "z": [-0.01, 0.01]},
+    object_velocity_range: dict = {},
+):
+    """Reset both robot joints and object position when success count reset is triggered.
+    
+    This function checks if the command term indicates a success count reset
+    has occurred and resets both the robot joints and object position atomically.
+    
+    Args:
+        env: The environment instance.
+        env_ids: Environment IDs to check and potentially reset.
+        command_name: Name of the command term to check for success count resets.
+        robot_asset_cfg: Asset configuration for the robot.
+        position_range: Position range for joint reset (same format as reset_joints_within_limits_range).
+        velocity_range: Velocity range for joint reset.
+        use_default_offset: Whether to offset ranges by default joint state.
+        operation: Whether ranges are absolute or scaled values.
+        object_asset_cfg: Asset configuration for the object.
+        pose_range: Position range for object reset (same format as reset_root_state_uniform).
+        object_velocity_range: Velocity range for object reset.
+    """
+    # Get the command term
+    command_term = env.command_manager.get_term(command_name)
+    
+    # Check if this command term has reset indicators
+    if hasattr(command_term, 'reset_occurred'):
+        # Find environments that had a success count reset
+        reset_mask = command_term.reset_occurred[env_ids]
+        success_reset_env_ids = env_ids[reset_mask]
+        
+        if len(success_reset_env_ids) > 0:
+                        
+            # Reset robot joints first
+            from isaaclab_tasks.manager_based.manipulation.inhand.mdp.events import reset_joints_within_limits_range
+            
+            # Create a dummy event term config for the robot reset function
+            class DummyRobotEventTermCfg:
+                def __init__(self):
+                    self.params = {
+                        "position_range": position_range,
+                        "velocity_range": velocity_range,
+                        "use_default_offset": use_default_offset,
+                        "asset_cfg": robot_asset_cfg,
+                        "operation": operation,
+                    }
+            
+            # Create and call the robot reset function
+            robot_reset_func = reset_joints_within_limits_range(DummyRobotEventTermCfg(), env)
+            robot_reset_func(
+                env=env,
+                env_ids=success_reset_env_ids,
+                position_range=position_range,
+                velocity_range=velocity_range,
+                use_default_offset=use_default_offset,
+                asset_cfg=robot_asset_cfg,
+                operation=operation,
+            )
+            
+            # Reset object position
+            import isaaclab.envs.mdp as mdp
+            mdp.reset_root_state_uniform(
+                env=env,
+                env_ids=success_reset_env_ids,
+                pose_range=pose_range,
+                velocity_range=object_velocity_range,
+                asset_cfg=object_asset_cfg,
+            )
+            
+            # Set the episode_ended flag for collect_rollouts.py to detect
+            if hasattr(command_term, '_episode_ended'):
+                command_term._episode_ended[success_reset_env_ids] = True
+            
+            # Clear the reset indicators for these environments (only once, at the end)
+            command_term.clear_reset_indicator(success_reset_env_ids)

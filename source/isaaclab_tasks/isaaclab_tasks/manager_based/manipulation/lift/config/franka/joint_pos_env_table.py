@@ -14,6 +14,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab_tasks.manager_based.manipulation.lift import mdp
 from isaaclab_tasks.manager_based.manipulation.lift.lift_env_cfg import LiftEnvCfg
 from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.sensors import FrameTransformerCfg, ContactSensorCfg
 
 ##
 # Pre-defined configs
@@ -32,6 +33,8 @@ class FrankaCubeLiftTableEnvCfg(LiftEnvCfg):
         # Set Franka as robot
         self.scene.robot = FRANKA_PANDA_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
+        self.scene.robot.spawn.activate_contact_sensors = True
+        
         # Set actions for the specific robot type (franka)
         self.actions.arm_action = mdp.JointPositionActionCfg(
             asset_name="robot", joint_names=["panda_joint.*"], scale=0.5, use_default_offset=True
@@ -76,20 +79,28 @@ class FrankaCubeLiftTableEnvCfg(LiftEnvCfg):
         self.commands.object_pose.ranges = ranges
 
         self.rewards.object_goal_tracking = RewTerm(
-            func=mdp.object_goal_distance,
-            params={"std": 0.3, "minimal_height": 0.03, "command_name": "object_pose"},
+            func=mdp.object_goal_distance_contact,
+            params={"std": 0.3, "minimal_height": 0.04, "orientation_weight":0.0, "min_contacts":2, "command_name": "object_pose"},
+
             weight=16.0,
         )
 
         self.rewards.object_goal_tracking_fine_grained = RewTerm(
-            func=mdp.object_goal_distance,
-            params={"std": 0.05, "minimal_height": 0.03, "command_name": "object_pose"},
+            func=mdp.object_goal_distance_contact,
+            params={"std": 0.05, "minimal_height": 0.04, "orientation_weight":0.0, "min_contacts":2, "command_name": "object_pose"},
             weight=5.0,
         )
 
-
         # No need to lift
         delattr(self.rewards, 'lifting_object')
+
+
+        self.scene.contact_forces = ContactSensorCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/panda_rightfinger|panda_leftfinger",
+            history_length=6,
+            force_threshold=1.0,  # Threshold for detecting contact (1N)
+            filter_prim_paths_expr=["{ENV_REGEX_NS}/Object"],  # Only track contacts with the object
+        )
 
         # Listens to the required transforms
         marker_cfg = FRAME_MARKER_CFG.copy()

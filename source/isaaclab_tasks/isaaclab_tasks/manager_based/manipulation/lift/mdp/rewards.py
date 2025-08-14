@@ -299,6 +299,91 @@ def object_is_lifted_contact_conditional(
     is_lifted = object.data.root_pos_w[:, 2] > minimal_height
     return is_contact.float() * is_lifted.float()
 
+def object_goal_distance_contact(
+    env: ManagerBasedRLEnv,
+    std: float,
+    command_name: str,
+    contact_sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces"),
+    min_contacts: int = 3,
+    orientation_weight: float = 0.0,
+    robot_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("object"),
+    # Height-based conditions (mutually exclusive)
+    minimal_height: float | None = None,  # For lifting tasks - object must be above this height
+) -> torch.Tensor:
+    """Unified reward for tracking goal pose (position + orientation) with flexible height conditions.
+    
+    This function combines the functionality of both lifting and table sliding reward functions:
+    - For lifting tasks: Set minimal_height, object must be above this height AND in contact
+    - For table tasks: Set table_height, object must be near table surface AND in contact
+    - If neither is set: Only contact condition is applied
+    
+    Args:
+        env: The environment instance.
+        std: Standard deviation for position tracking tanh kernel.
+        command_name: Name of the command to track.
+        contact_sensor_cfg: Configuration for contact sensor.
+        min_contacts: Minimum number of contacts required.
+        orientation_weight: Weight for orientation component in combined reward.
+        robot_cfg: Configuration for robot entity.
+        object_cfg: Configuration for object entity.
+        minimal_height: If set, object must be above this height (lifting mode).
+        table_height: If set, object must be near this height within tolerance (table mode).
+        table_tolerance: Tolerance for table height checking.
+        
+    Returns:
+        Reward tensor based on goal tracking with specified height conditions.
+    """
+    from isaaclab.sensors import ContactSensor
+    
+    
+    # Extract entities
+    robot: RigidObject = env.scene[robot_cfg.name]
+    object: RigidObject = env.scene[object_cfg.name]
+    contact_sensor: ContactSensor = env.scene.sensors[contact_sensor_cfg.name]
+    command = env.command_manager.get_command(command_name)
+    
+    # Check if in contact
+    net_contact_forces = contact_sensor.data.net_forces_w_history
+    contact_force_magnitudes = torch.norm(net_contact_forces, dim=-1)
+    max_contact_forces = torch.max(contact_force_magnitudes, dim=1)[0]
+    contact_bodies = max_contact_forces > contact_sensor.cfg.force_threshold
+    num_contacts = torch.sum(contact_bodies.float(), dim=1)
+    is_contact = num_contacts >= min_contacts
+    
+    # Compute the desired position and orientation in world frame
+    des_pos_b = command[:, :3]
+    des_quat_b = command[:, 3:7]  # quaternion (w,x,y,z)
+    des_pos_w, des_quat_w = combine_frame_transforms(
+        robot.data.root_pos_w, robot.data.root_quat_w, des_pos_b, des_quat_b
+    )
+    
+    # Position tracking reward
+    position_distance = torch.norm(des_pos_w - object.data.root_pos_w, dim=1)
+    position_reward = 1 - torch.tanh(position_distance / std)
+    
+    # Orientation tracking reward
+    # Compute orientation error between object and target quaternions
+    obj_quat = object.data.root_quat_w  # (w,x,y,z)
+    # Quaternion dot product gives cosine of half the rotation angle
+    quat_dot = torch.abs(torch.sum(obj_quat * des_quat_w, dim=1))
+    # Clamp to avoid numerical issues with acos
+    quat_dot = torch.clamp(quat_dot, 0.0, 1.0)
+    # Convert to rotation angle (in radians)
+    orientation_error = 2.0 * torch.acos(quat_dot)
+    orientation_reward = 1 - torch.tanh(orientation_error / 1.0)  # std=1.0 radians for orientation
+    
+    # Combine position and orientation rewards
+    combined_reward = position_reward + orientation_weight * orientation_reward
+    
+    # Apply height-based conditions
+    # Lifting mode: object must be above minimal height
+    is_lifted = object.data.root_pos_w[:, 2] > minimal_height
+
+    
+    return is_contact.float() * is_lifted.float() * combined_reward
+
+
 
 def object_goal_distance_unified(
     env: ManagerBasedRLEnv,

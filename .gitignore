@@ -14,12 +14,6 @@
 **/*.usdc
 **/*.usdz
 
-# Exception: Allow USD files in isaaclab_assets/data for debugging
-!source/isaaclab_assets/data/**/*.usd
-!source/isaaclab_assets/data/**/*.usda
-!source/isaaclab_assets/data/**/*.usdc
-!source/isaaclab_assets/data/**/*.usdz
-
 # Python
 .DS_Store
 **/*.egg-info/
