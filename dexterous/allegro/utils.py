@@ -10,13 +10,11 @@ OBS_INDICES = {
     "object_quat": (35, 39),
     "object_lin_vel": (39, 42),
     "object_ang_vel": (42, 45),
+    "goal_pose": (45, 52),
+    "goal_quat_diff": (52, 56),
     "last_action": (56, 72),
 }
 
-GOAL_INDICES = {
-    "goal_pose": (45, 52),
-    "goal_quat_diff": (52, 56),
-}
 
 
 def get_state_from_env(obs, obs_keys, goal_keys = None, device = 'cuda'):
@@ -33,7 +31,7 @@ def get_state_from_env(obs, obs_keys, goal_keys = None, device = 'cuda'):
     if goal_keys is not None:
         goal_dict = {}
         for key in goal_keys:
-            current = torch.tensor(obs[:, GOAL_INDICES[key][0]:GOAL_INDICES[key][1]], dtype=torch.float32, device=device)
+            current = torch.tensor(obs[:, OBS_INDICES[key][0]:OBS_INDICES[key][1]], dtype=torch.float32, device=device)
             goal_dict[key] = current
 
     return obs_dict, goal_dict

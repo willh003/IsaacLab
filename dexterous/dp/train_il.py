@@ -69,7 +69,7 @@ from pathlib import Path
 
 # Robomimic imports
 # IMPORTANT: do not remove these, because they are required to register the diffusion policy
-from dp import DiffusionPolicyConfig, DiffusionPolicyUNet
+from dp_model import DiffusionPolicyConfig, DiffusionPolicyUNet
 from utils import get_exp_dir, detect_z_rotation_direction_batch
 
 import robomimic.utils.env_utils as EnvUtils
