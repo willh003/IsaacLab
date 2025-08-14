@@ -81,7 +81,7 @@ from robomimic.algo import algo_factory
 from robomimic.config import Config, config_factory
 from robomimic.utils.log_utils import DataLogger, PrintLogger
 
-from utils import load_cfg_from_registry
+from utils import load_cfg_from_registry_no_gym
 
 
 import wandb
@@ -423,7 +423,7 @@ def main(args: argparse.Namespace):
         task_name = args.task.split(":")[-1]
 
         print(f"Loading configuration for task: {task_name}")
-        ext_cfg = load_cfg_from_registry(args.task, cfg_entry_point_key)
+        ext_cfg = load_cfg_from_registry_no_gym(args.task, cfg_entry_point_key)
         config = config_factory(ext_cfg["algo_name"])
 
         filtered_ext_cfg = filter_config_dict(ext_cfg, config)
