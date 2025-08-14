@@ -13,6 +13,7 @@ OBS_INDICES = {
     "goal_pose": (45, 52),
     "goal_quat_diff": (52, 56),
     "last_action": (56, 72),
+    "fingertip_contacts": (72, 76),
 }
 
 
