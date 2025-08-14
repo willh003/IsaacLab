@@ -65,12 +65,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm   
 import psutil
 import collections
+from pathlib import Path
 
 # Robomimic imports
 # IMPORTANT: do not remove these, because they are required to register the diffusion policy
 from dp import DiffusionPolicyConfig, DiffusionPolicyUNet
 from utils import get_exp_dir, detect_z_rotation_direction_batch
-from isaaclab.utils.math import euler_xyz_from_quat
 
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.file_utils as FileUtils
@@ -81,16 +81,7 @@ from robomimic.algo import algo_factory
 from robomimic.config import Config, config_factory
 from robomimic.utils.log_utils import DataLogger, PrintLogger
 
-# Isaac Lab imports (needed so that environment is registered)
-#import isaaclab_tasks  # noqa: F401
-# import isaaclab_tasks.manager_based.manipulation.pick_place  # noqa: F401
-
-from isaaclab.app import AppLauncher
-
-# create new namespace with headless=True for the launcher
-app_launcher = AppLauncher(headless=True)
-simulation_app = app_launcher.app
-from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
+from utils import load_cfg_from_registry
 
 
 import wandb
@@ -282,57 +273,6 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         )
     else:
         valid_loader = None
-
-
-    def test_train_loader():
-        import matplotlib.pyplot as plt
-
-        cc = []
-        cw = []
-
-        cc_y = []
-        cw_y = []
-
-        for j in range(10): 
-            for i, batch in enumerate(train_loader):
-                object_rot = batch["obs"]["object_rot"]
-                goal_rot = batch["goal_obs"]["object_rot"]
-
-
-                r, p, y = euler_xyz_from_quat(goal_rot)
-                y = y.cpu().numpy()
-
-                z_rot_direction = detect_z_rotation_direction_batch(object_rot.permute(1, 0, 2)).cpu().numpy()
-
-                cc.extend(goal_rot.cpu().numpy()[z_rot_direction == 1])
-                cw.extend(goal_rot.cpu().numpy()[z_rot_direction == -1])
-
-                cc_y.extend(y[z_rot_direction == 1])
-                cw_y.extend(y[z_rot_direction == -1])
-
-        cc = np.array(cc)
-        cw = np.array(cw)
-
-
-        plt.scatter(cw[:,0], cw[:,-1], label="CW", color="blue", s=.2, alpha=0.3)
-        plt.scatter(cc[:,0], cc[:,-1], label="CCW", color="red", s=.8, alpha=1)
-
-        plt.xlabel("w quaternion")
-        plt.ylabel("z quaternion")
-        plt.legend()
-        plt.savefig("goal_rot.png")
-        plt.close()
-        plt.clf()
-        plt.hist(cc[:, -1], label="CCW", color="red", alpha=0.5)
-        plt.hist(cw[:, -1], label="CW", color="blue", alpha=0.5)
-        plt.savefig("goal_rot_hist.png")
-
-        plt.xlabel("z theta")
-        plt.close()
-        plt.clf()
-
-        print(f"saved figure with {len(cc)} CCW and {len(cw)} CW")
-
     
     #test_train_loader()
 
@@ -483,8 +423,6 @@ def main(args: argparse.Namespace):
         task_name = args.task.split(":")[-1]
 
         print(f"Loading configuration for task: {task_name}")
-        print(gym.envs.registry.keys())
-        print(" ")
         ext_cfg = load_cfg_from_registry(args.task, cfg_entry_point_key)
         config = config_factory(ext_cfg["algo_name"])
 
@@ -550,9 +488,12 @@ if __name__ == "__main__":
         help="(optional) if provided, override the dataset path defined in the config",
     )
 
+    home_dir = Path.home()
+    log_dir = home_dir / "IsaacLab/dexterous/logs/dexterous"
+
     parser.add_argument("--task", type=str, default=None, help="Name of the task.")
     parser.add_argument("--algo", type=str, default=None, help="Name of the algorithm.")
-    parser.add_argument("--log_dir", type=str, default="/home/will/IsaacLab/dexterous/logs/dexterous", help="Path to log directory")
+    parser.add_argument("--log_dir", type=str, default=log_dir, help="Path to log directory")
     parser.add_argument("--normalize_training_actions", action="store_true", default=True, help="Normalize actions")
     parser.add_argument("--wandb", type=str, default="online", help="Wandb mode")
     parser.add_argument("--obs_cond", type=lambda x: x.split(',') if x is not None else None, default=None, help="Observation conditioning")
@@ -562,5 +503,4 @@ if __name__ == "__main__":
 
     # run training
     main(args)
-    # close sim app
-    simulation_app.close()
+
