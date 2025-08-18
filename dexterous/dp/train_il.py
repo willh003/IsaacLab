@@ -317,13 +317,20 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     if config.experiment.validate:
         wandb_cfg["train"]["valid_length"] = len(validset)
     
+    wandb_tags = []
+    if config["train"]["goal_mode"] is not None:
+        wandb_tags.append(config["train"]["goal_mode"])
+    if config["algo_name"] == "diffusion_policy":
+        wandb_tags.append("dp")
+
     wandb.init(
         project="dexterous",
         entity="willhu003",
         name=os.path.basename(os.path.dirname(log_dir)), # log dir is under the experiment dir
         config=wandb_cfg,
         dir=log_dir,
-        mode=wandb_mode
+        mode=wandb_mode,
+        tags=wandb_tags
     )
 
     # main training loop
@@ -454,7 +461,7 @@ def main(args: argparse.Namespace):
 
         print(f"Loading configuration for task: {task_name}")
         ext_cfg = load_cfg_from_registry_no_gym(args.task, cfg_entry_point_key)
-        config = config_factory(ext_cfg["algo_name"])
+        config = config_factory(ext_cfg["algo_name"])d
 
         filtered_ext_cfg = filter_config_dict(ext_cfg, config)
         with config.values_unlocked():

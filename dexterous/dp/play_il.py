@@ -2,7 +2,32 @@
 
 """Launch Isaac Sim Simulator first."""
 
+# CRITICAL: Early parsing for config override before any imports
 import argparse
+import os
+import sys
+
+def parse_args_early():
+    """Parse arguments early to set environment variables before imports."""
+    parser = argparse.ArgumentParser()
+    
+    # Critical arguments needed before import
+    parser.add_argument("--config", type=str, default=None, 
+                       help="Override robomimic config entry point (e.g., 'path.to.your.config:your_cfg.json')")
+    parser.add_argument("--algo", type=str, default="diffusion_policy", help="Algorithm name for config override.")
+    
+    # Parse only the arguments we need, ignore the rest for now
+    args, unknown = parser.parse_known_args()
+    return args
+
+# Parse early arguments and set environment variables BEFORE any imports
+early_args = parse_args_early()
+if early_args.config is not None:
+    env_var_name = f"ROBOMIMIC_{early_args.algo.upper()}_CFG_ENTRY_POINT"
+    os.environ[env_var_name] = early_args.config
+    print(f"Pre-import override: {env_var_name} = {early_args.config}")
+
+# Now proceed with AppLauncher setup
 from isaaclab.app import AppLauncher
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play an IL policy")
@@ -24,6 +49,9 @@ parser.add_argument(
     help="Use the pre-trained checkpoint from Nucleus.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--config", type=str, default=None, 
+                   help="Override robomimic config entry point (e.g., 'path.to.your.config:your_cfg.json')")
+parser.add_argument("--algo", type=str, default="diffusion_policy", help="Algorithm name for config override.")
 
 
 AppLauncher.add_app_launcher_args(parser)
@@ -64,9 +92,14 @@ import os
 
 # TODO: hacky way to import get_state_from_env_leap
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions
+from dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions, clear_task_registry_cache
 from leap.utils import get_state_from_env as get_state_from_env_leap
 from allegro.utils import get_state_from_env as get_state_from_env_allegro
+
+# Clear the task registry cache after setting environment variable
+# This ensures the override is applied when the registry is rebuilt
+if early_args.config is not None:
+    clear_task_registry_cache()
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -103,7 +136,11 @@ def main():
         # Robomimic dps put the goal into the obs_encoder, so no need for separate goal
         is_dp = True
         obs_keys = list(policy.policy.nets['policy']['obs_encoder'].nets['obs'].obs_nets.keys())
-        goal_keys = None
+
+        if 'goal' in policy.policy.nets['policy']['obs_encoder'].nets.keys():
+            goal_keys = list(policy.policy.nets['policy']['obs_encoder'].nets['goal'].obs_nets.keys())
+        else:
+            goal_keys = None
     else: 
         # robomimic bc implementation
         is_dp = False
@@ -160,7 +197,14 @@ def main():
             else:
                 goal_dict = None
         elif "allegro" in args_cli.task.lower():
+            print(f"DEBUG: obs_keys = {obs_keys}")
+            print(f"DEBUG: goal_keys = {goal_keys}")
+            print(f"DEBUG: obs keys = {list(obs.keys())}")
+            if 'policy' in obs:
+                print(f"DEBUG: obs['policy'] shape = {obs['policy'].shape}")
             obs_dict, goal_dict = get_state_from_env_allegro(obs, obs_keys, goal_keys, device=args_cli.device)
+            print(f"DEBUG: obs_dict keys = {list(obs_dict.keys())}")
+            print(f"DEBUG: goal_dict = {goal_dict}")
         
         else:
             raise NotImplementedError(f"Task {args_cli.task} not implemented")

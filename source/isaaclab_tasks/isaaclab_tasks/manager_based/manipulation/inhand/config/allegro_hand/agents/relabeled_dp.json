@@ -133,7 +133,10 @@
         "modalities": {
             "obs": {
                 "low_dim": [
-                    "robot0_joint_pos" 
+                    "robot0_joint_pos",
+                    "object_pos",
+                    "object_quat",
+                    "last_action"
                 ],
                 "rgb": [],
                 "depth": [],
