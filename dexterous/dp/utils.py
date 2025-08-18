@@ -19,6 +19,11 @@ import ast
 # Global registry cache
 _TASK_REGISTRY_CACHE = None
 
+def clear_task_registry_cache():
+    """Clear the task registry cache to force rebuild."""
+    global _TASK_REGISTRY_CACHE
+    _TASK_REGISTRY_CACHE = None
+
 
 def _extract_gym_register_from_file(file_path: str) -> list[dict]:
     """Extract gym.register calls from a Python file without importing it."""
@@ -55,6 +60,9 @@ def _extract_gym_register_from_file(file_path: str) -> list[dict]:
                                     kwargs[k.value] = _reconstruct_fstring(v, file_path)
                                 elif isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
                                     kwargs[k.value] = v.value
+                                elif isinstance(k, ast.Constant) and isinstance(v, ast.Call):
+                                    # Handle function calls like get_robomimic_entry_point()
+                                    kwargs[k.value] = _handle_function_call(v, file_path)
                             registration['kwargs'] = kwargs
                 
                 if 'id' in registration and 'kwargs' in registration:
@@ -66,6 +74,39 @@ def _extract_gym_register_from_file(file_path: str) -> list[dict]:
     
     return registrations
 
+
+def _handle_function_call(node: ast.Call, file_path: str) -> str:
+    """Handle function calls in gym.register kwargs, specifically get_robomimic_entry_point()."""
+    if (isinstance(node.func, ast.Name) and 
+        node.func.id == "get_robomimic_entry_point"):
+        # Extract the arguments
+        if len(node.args) >= 2:
+            algo_name = None
+            default_entry_point = None
+            
+            # Get algorithm name (first arg)
+            if isinstance(node.args[0], ast.Constant):
+                algo_name = node.args[0].value
+            
+            # Get default entry point (second arg)
+            if isinstance(node.args[1], ast.JoinedStr):
+                default_entry_point = _reconstruct_fstring(node.args[1], file_path)
+            elif isinstance(node.args[1], ast.Constant):
+                default_entry_point = node.args[1].value
+            
+            if algo_name and default_entry_point:
+                # Check environment variable
+                env_var_name = f"ROBOMIMIC_{algo_name.upper()}_CFG_ENTRY_POINT"
+                override = os.environ.get(env_var_name)
+                if override:
+                    print(f"[INFO] Using override for {env_var_name}: {override}")
+                    return override
+                else:
+                    print(f"[INFO] No override found for {env_var_name}, using default: {default_entry_point}")
+                    return default_entry_point
+    
+    # Fallback: return empty string for unhandled cases
+    return ""
 
 def _reconstruct_fstring(node: ast.JoinedStr, file_path: str) -> str:
     """Reconstruct f-string value by replacing common patterns."""

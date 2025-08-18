@@ -6,7 +6,6 @@
 """Script to play a checkpoint if an RL agent from RSL-RL."""
 
 """Launch Isaac Sim Simulator first."""
-
 import argparse
 
 from robomimic.models.obs_nets import D

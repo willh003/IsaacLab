@@ -45,17 +45,41 @@ This file has been modified from the original robomimic version to integrate wit
 
 """Rest everything follows."""
 
-# Standard library imports
+# CRITICAL: Parse arguments first to set environment variables before imports
 import argparse
+import os
+import sys
+from pathlib import Path
+
+def parse_args_early():
+    """Parse arguments early to set environment variables before imports."""
+    parser = argparse.ArgumentParser()
+    
+    # Critical arguments needed before import
+    parser.add_argument("--config", type=str, default=None, 
+                       help="Override robomimic config entry point (e.g., 'path.to.your.config:your_cfg.json')")
+    parser.add_argument("--algo", type=str, default=None, help="Name of the algorithm.")
+    
+    # Parse only the arguments we need, ignore the rest for now
+    args, unknown = parser.parse_known_args()
+    return args
+
+# Parse early arguments and set environment variables BEFORE any imports
+early_args = parse_args_early()
+if early_args.config is not None and early_args.algo is not None:
+    env_var_name = f"ROBOMIMIC_{early_args.algo.upper()}_CFG_ENTRY_POINT"
+    os.environ[env_var_name] = early_args.config
+    print(f"Pre-import override: {env_var_name} = {early_args.config}")
+
+# Now proceed with all other imports
 from re import S
 
 # Third-party imports
+import gymnasium as gym
 import h5py
 import json
 import numpy as np
-import os
 import shutil
-import sys
 import time
 import torch
 import traceback
@@ -64,12 +88,16 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm   
 import psutil
 import collections
-from pathlib import Path
 
 # Robomimic imports
 # IMPORTANT: do not remove these, because they are required to register the diffusion policy
 from dp_model import DiffusionPolicyConfig, DiffusionPolicyUNet
-from utils import get_exp_dir, detect_z_rotation_direction_batch
+from utils import get_exp_dir, detect_z_rotation_direction_batch, clear_task_registry_cache
+
+# Clear the task registry cache after setting environment variable
+# This ensures the override is applied when the registry is rebuilt
+if early_args.config is not None and early_args.algo is not None:
+    clear_task_registry_cache()
 
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.file_utils as FileUtils
@@ -193,10 +221,8 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     print(model)  # print model summary
     print("")
 
-    all_obs_keys = shape_meta["all_obs_keys"]
-
     # load training data
-    trainset, validset = TrainUtils.load_data_for_training(config, obs_keys=all_obs_keys)
+    trainset, validset = TrainUtils.load_data_for_training(config, obs_keys=shape_meta["all_obs_keys"])
 
     train_sampler = trainset.get_dataset_sampler()
     print("\n============= Training Dataset =============")
@@ -291,15 +317,13 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     if config.experiment.validate:
         wandb_cfg["train"]["valid_length"] = len(validset)
     
-
     wandb.init(
         project="dexterous",
         entity="willhu003",
         name=os.path.basename(os.path.dirname(log_dir)), # log dir is under the experiment dir
         config=wandb_cfg,
         dir=log_dir,
-        mode=wandb_mode,
-        tags = ['dp']
+        mode=wandb_mode
     )
 
     # main training loop
@@ -420,6 +444,8 @@ def main(args: argparse.Namespace):
     Args:
         args: Command line arguments.
     """
+    # Environment variable already set before imports if needed
+    
     # load config
     if args.task is not None:
         # obtain the configuration entry point
@@ -474,6 +500,7 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == "__main__":
+    # Full argument parser (early args were already parsed)
     parser = argparse.ArgumentParser()
 
     # Experiment Name (for tensorboard, saving models, etc.)
@@ -493,7 +520,7 @@ if __name__ == "__main__":
     )
 
     home_dir = Path.home()
-    log_dir = home_dir / "IsaacLab/dexterous/dp/logs/"
+    log_dir = home_dir / "IsaacLab/dexterous/logs/dexterous"
 
     parser.add_argument("--task", type=str, default=None, help="Name of the task.")
     parser.add_argument("--algo", type=str, default=None, help="Name of the algorithm.")
@@ -502,6 +529,8 @@ if __name__ == "__main__":
     parser.add_argument("--wandb", type=str, default="online", help="Wandb mode")
     parser.add_argument("--obs_cond", type=lambda x: x.split(',') if x is not None else None, default=None, help="Observation conditioning")
     parser.add_argument("--goal_cond", type=lambda x: x.split(',') if x is not None else None, default=None, help="Goal conditioning")
+    parser.add_argument("--config", type=str, default=None, 
+                       help="Override robomimic config entry point (e.g., 'path.to.your.config:your_cfg.json')")
 
     args = parser.parse_args()
 

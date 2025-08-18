@@ -4,8 +4,22 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import gymnasium as gym
+import os
 
 from . import agents
+
+def get_robomimic_entry_point(algo_name: str, default_entry_point: str) -> str:
+    """Get robomimic entry point with environment variable override support.
+    
+    Args:
+        algo_name: Algorithm name (e.g., 'diffusion_policy', 'bc')
+        default_entry_point: Default entry point path
+        
+    Returns:
+        Entry point path (possibly overridden by environment variable)
+    """
+    env_var_name = f"ROBOMIMIC_{algo_name.upper()}_CFG_ENTRY_POINT"
+    return os.environ.get(env_var_name, default_entry_point)
 
 ##
 # Register Gym environments.
@@ -24,9 +38,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
     },
 )
 
@@ -39,9 +53,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
     },
 )
 
@@ -54,9 +68,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
     },
 )
 
@@ -69,9 +83,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:gcdp_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:gcdp_cfg.json"),
     },
 )
 
@@ -84,9 +98,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:gcdp_sparse_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:gcdp_sparse_cfg.json"),
     },
 )
 
@@ -100,9 +114,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:LeapCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
     },
 )
 
@@ -115,9 +129,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
     },
 )
 
@@ -134,9 +148,9 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubeNoVelObsPPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
     },
 )
 
@@ -149,8 +163,8 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubeNoVelObsPPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
-        "robomimic_bc_cfg_entry_point": f"{agents.__name__}:bc_cfg.json",
-        "robomimic_bc_rnn_low_dim_cfg_entry_point": f"{agents.__name__}:bc_rnn_low_dim.json",
-        "robomimic_diffusion_policy_cfg_entry_point": f"{agents.__name__}:diffusion_policy_cfg.json",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
     },
 )
