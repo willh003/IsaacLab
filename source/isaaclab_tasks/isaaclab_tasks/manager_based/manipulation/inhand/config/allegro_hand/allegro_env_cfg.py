@@ -145,6 +145,8 @@ class AllegroCubeMultiResetEnvCfg(AllegroCubeContactObsEnvCfg):
         # post init of parent
         super().__post_init__()
 
+        delattr(self.terminations, "max_consecutive_success")
+
         # Replace the command with the success count reset version
         # This will track consecutive successes and reset after N successes
         self.commands.object_pose = mdp.SuccessCountResetCommandCfg(
@@ -154,7 +156,7 @@ class AllegroCubeMultiResetEnvCfg(AllegroCubeContactObsEnvCfg):
             make_quat_unique=False,
             marker_pos_offset=(-0.2, -0.06, 0.08),
             debug_vis=True,
-            successes_before_reset=20,  # Reset after 10 consecutive successes
+            successes_before_reset=20, 
             # Option 1: Random orientation resets (default behavior)
             #use_predefined_reset=False,
             # Option 2: Predefined orientation resets

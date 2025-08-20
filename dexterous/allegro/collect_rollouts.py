@@ -46,6 +46,29 @@ import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 from isaaclab.utils.datasets import EpisodeData, HDF5DatasetFileHandler
 
+# Validate goal pose consistency in saved episodes
+def check_goal_pose_consistency(episode):
+    """Check if goal_pose remains consistent throughout the episode."""
+    if "goal_pose" not in episode.data["obs"]:
+        print(f"[WARNING] Episode  No goal_pose found in observations")
+        return False
+    
+    goal_poses = episode.data["obs"]["goal_pose"]
+    if len(goal_poses) < 2:
+        return True  # Single step episode, trivially consistent
+    
+    first_goal = goal_poses[0]
+    for i, goal in enumerate(goal_poses[1:], 1):
+        # Check if goal pose changed (allowing small numerical differences)
+        if torch.allclose(first_goal, goal, atol=1e-6):
+            continue
+        else:
+            print(f"[ERROR] Goal pose changed at step {i}!")
+            print(f"  Initial goal: {first_goal}")
+            print(f"  Changed goal: {goal}")
+            return False
+    return True
+
 def main():
     """Collect rollouts with RSL-RL agent and save in robomimic-compatible HDF5 format."""
     task_name = args_cli.task.split(":")[-1]
@@ -98,6 +121,7 @@ def main():
     
     # Track episode completion reasons
     episodes_completed_by_reset = 0
+    episodes_discarded_by_failure = 0
     
     obs, _ = env.get_observations()
 
@@ -128,9 +152,9 @@ def main():
                     current_episodes[i].add("actions", actions[i].cpu())
                     episode_step_counts[i] += 1
                     
-                obs, _, _, _ = env.step(actions)
+                obs, rewards, dones, extras = env.step(actions)
                 
-                # Check for environment resets due to success count reset mechanism
+                # Check for environment resets due to success count reset mechanism (successful episodes)
                 env_reset = np.zeros(num_envs, dtype=bool)
                 command_term = env.unwrapped.command_manager.get_term("object_pose")
                 if hasattr(command_term, 'episode_ended'):
@@ -143,20 +167,33 @@ def main():
                 else:
                     print("[WARNING] Environment does not have 'episode_ended' attribute. Success count reset detection disabled.")
                 
-                # For environments where environment was reset, finalize current episode and start new one
+                # Check for terminations/truncations (failures)
+                env_failed = dones.cpu().numpy().astype(bool) & ~env_reset  # Failed if done but not due to success reset
+                
+                # Handle episode endings (both successful and failed)
                 episodes_completed_this_step = 0
                 for i in range(num_envs):
-                    episode_should_end = env_reset[i] and episode_step_counts[i] > 10
+                    episode_should_end = (env_reset[i] and episode_step_counts[i] > 10) or env_failed[i]
                     
                     if episode_should_end:
-                        # Finalize current episode if it has data
-                        if episode_step_counts[i] > 0:
-                            all_episodes.append(current_episodes[i])
-                            episodes_completed_this_step += 1
-                            print(f"[INFO] Completed episode for env {i} with {episode_step_counts[i]} steps (env reset)")
-                            episodes_completed_by_reset += 1
+                        if env_reset[i] and episode_step_counts[i] > 10:
+                            # Successful episode - save it
+                            if episode_step_counts[i] > 0:
+                                all_episodes.append(current_episodes[i])
+                                episodes_completed_this_step += 1
+                                print(f"[INFO] Completed episode for env {i} with {episode_step_counts[i]} steps (success)")
+                                episodes_completed_by_reset += 1
+                        elif env_failed[i]:
+                            # Failed episode - don't save, just clear
+                            print(f"[DEBUG] Success not detected for env {i}:")
+                            print(f"  - Episode length: {episode_step_counts[i]} steps")
+                            print(f"  - Max episode length: {env.unwrapped.max_episode_length}")
+                            
+                            if episode_step_counts[i] > 0:
+                                print(f"[INFO] Discarded failed episode for env {i} with {episode_step_counts[i]} steps (failure)")
+                                episodes_discarded_by_failure += 1
                         
-                        # Start new episode for this environment
+                        # Start new episode for this environment (regardless of success/failure)
                         current_episodes[i] = EpisodeData()
                         episode_step_counts[i] = 0
                 
@@ -180,12 +217,23 @@ def main():
                 time.sleep(sleep_time)
     
     
-    # Write all episodes as separate demos (robomimic-compatible)
-    for ep in all_episodes:
+    # Validate all episodes before writing
+    print(f"[INFO] Validating goal pose consistency across {len(all_episodes)} episodes...")
+    valid_episodes = []
+    invalid_episodes = 0
+    
+    for i, ep in enumerate(all_episodes):
+        assert check_goal_pose_consistency(ep), "Failure: goals are not consistent across trajectory"
+        valid_episodes.append(ep)
+    
+    print(f"[INFO] All {len(valid_episodes)} episodes passed goal pose consistency check")
+    
+    # Write all validated episodes as separate demos (robomimic-compatible)
+    for ep in valid_episodes:
         handler.write_episode(ep)
     
     # split into train and test by adding a field {mask/train: [demo0, demo1, ...]} and another field {mask/test: [demo0, demo1, ...]}
-    num_episodes = len(all_episodes)
+    num_episodes = len(valid_episodes)
     split_idx = int(args_cli.train_split * num_episodes)
     demo_keys = [f"demo_{i}" for i in range(num_episodes)]
     train_demo_keys = demo_keys[:split_idx]
@@ -193,14 +241,15 @@ def main():
     handler.add_mask_field("train", train_demo_keys)
     handler.add_mask_field("test", test_demo_keys)
 
-    assert len(train_demo_keys) > 0 and len(test_demo_keys) > 0, "No episodes were added to the train or test split"
+    if num_episodes > 0:
+        assert len(train_demo_keys) > 0 and len(test_demo_keys) > 0, "No episodes were added to the train or test split"
     
     handler.flush()
     handler.close()
 
 
-    print(f"[INFO] Done. Saved {len(all_episodes)} episodes with {step_count} total steps (average {step_count/len(all_episodes)} steps per episode) to {args_cli.output}.")
-    print(f"[INFO] Episode completion breakdown: {episodes_completed_by_reset} by environment reset")
+    print(f"[INFO] Done. Saved {len(valid_episodes)} episodes with {step_count} total steps (average {step_count/len(valid_episodes) if len(valid_episodes) > 0 else 0:.1f} steps per episode) to {args_cli.output}.")
+    print(f"[INFO] Episode completion breakdown: {episodes_completed_by_reset} episodes completed successfully, {episodes_discarded_by_failure} failed episodes discarded, {invalid_episodes} episodes discarded due to goal inconsistency")
     env.close()
 
 

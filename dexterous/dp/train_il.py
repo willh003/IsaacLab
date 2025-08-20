@@ -223,12 +223,11 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
 
     # load training data
     trainset, validset = TrainUtils.load_data_for_training(config, obs_keys=shape_meta["all_obs_keys"])
-
     train_sampler = trainset.get_dataset_sampler()
     print("\n============= Training Dataset =============")
     print(trainset)
     print("")
-
+    
     # maybe retrieve statistics for normalizing observations
     obs_normalization_stats = None
     if config.train.hdf5_normalize_obs:
@@ -461,7 +460,7 @@ def main(args: argparse.Namespace):
 
         print(f"Loading configuration for task: {task_name}")
         ext_cfg = load_cfg_from_registry_no_gym(args.task, cfg_entry_point_key)
-        config = config_factory(ext_cfg["algo_name"])d
+        config = config_factory(ext_cfg["algo_name"])
 
         filtered_ext_cfg = filter_config_dict(ext_cfg, config)
         with config.values_unlocked():

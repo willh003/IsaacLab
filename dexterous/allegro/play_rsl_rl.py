@@ -7,6 +7,13 @@
 
 """Launch Isaac Sim Simulator first."""
 import argparse
+from utils import get_state_from_env, get_goal_from_env
+
+# Import evaluation module
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from dp.evaluation import EpisodeEvaluator, NUM_EVAL_ENVS, NUM_EVAL_STEPS
 
 from robomimic.models.obs_nets import D
 
@@ -30,6 +37,8 @@ parser.add_argument(
     action="store_true",
     help="Use the pre-trained checkpoint from Nucleus.",
 )
+parser.add_argument("--eval", action="store_true",default=False,help="whether to enable evaluation config (overriding other settings like n_env)")
+
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -65,12 +74,19 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper, expor
 import isaaclab_tasks  # noqa: F401
 from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
 
+
 # PLACEHOLDER: Extension template (do not remove this comment)
 
 
 def main():
     """Play with RSL-RL agent."""
     task_name = args_cli.task.split(":")[-1]
+
+    if args_cli.eval: 
+        print("WARNING: setting num_envs and n_steps to eval defaults (overriding cli)")
+        args_cli.num_envs = NUM_EVAL_ENVS
+        args_cli.n_steps = NUM_EVAL_STEPS
+
     # parse configuration
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
@@ -151,6 +167,15 @@ def main():
     rewards = np.array([])
     n_steps = 0
 
+    # Initialize evaluation tracking
+    evaluator = EpisodeEvaluator(args_cli.num_envs)
+    
+    # Define observation keys for allegro (assuming standard keys)
+    obs_keys = ["robot0_joint_pos", "robot0_joint_vel", "object_pos", "object_quat", 
+                "object_lin_vel", "object_ang_vel", "goal_pose", "goal_quat_diff", 
+                "last_action", "fingertip_contacts"]
+    goal_keys = ["object_quat"]  # We need object_quat for goal
+
     # reset environment
     obs, _ = env.get_observations()
     finished = False
@@ -159,7 +184,7 @@ def main():
     total_consecutive_success = np.zeros(args_cli.num_envs)
     # simulate environment
     while simulation_app.is_running() and not finished:
-        with tqdm(range(args_cli.n_steps // args_cli.num_envs)) as pbar:
+        with tqdm(range(args_cli.n_steps)) as pbar:
             for i in pbar:  
                 start_time = time.time()
                 # run everything in inference mode
@@ -168,6 +193,16 @@ def main():
                     actions = policy(obs)
                     # env stepping
                     obs, rew, dones, extras = env.step(actions)
+
+                # Extract observations for evaluation
+                obs_dict = get_state_from_env(obs, obs_keys, device=args_cli.device)
+                goal_dict = get_goal_from_env(obs, goal_keys, device=args_cli.device)
+                
+                # Update evaluation tracking
+                evaluator.update_step_evaluation(obs_dict, goal_dict, rew)
+                
+                # Check for episode completion and update evaluation
+                evaluator.check_episode_completion(env, obs_dict, goal_dict, dones)
                 
                 rewards = np.concatenate([rewards, rew.cpu().numpy()])
 
@@ -189,6 +224,10 @@ def main():
                     time.sleep(sleep_time)
 
                 pbar.set_description(f"Mean reward: {rew.mean().item():.2f}, max reward: {rew.max().item():.2f}")
+
+        # Finalize any in-progress episodes and print evaluation results
+        evaluator.finalize_all_episodes(obs_dict, goal_dict)
+        evaluator.print_evaluation_results()
 
         # After the loop, print the mean
         print(f"Mean reward: {np.mean(rewards):.2f} over {n_steps} steps")

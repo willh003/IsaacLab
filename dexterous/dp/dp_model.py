@@ -212,6 +212,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
                 "obs": batch["obs"],
                 "goal": batch["goal_obs"]
             }
+
+            #not_equal = torch.nonzero((inputs["obs"]["goal_pose"] - inputs["goal"]["goal_pose"])**2 > .0000001)
+            
+
             for k in self.obs_shapes:
                 # first two dimensions should be [B, T] for inputs
                 assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])

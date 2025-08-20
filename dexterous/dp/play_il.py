@@ -23,6 +23,9 @@ def parse_args_early():
 # Parse early arguments and set environment variables BEFORE any imports
 early_args = parse_args_early()
 if early_args.config is not None:
+    if os.path.exists(early_args.config):
+        cfg_path = early_args.config
+
     env_var_name = f"ROBOMIMIC_{early_args.algo.upper()}_CFG_ENTRY_POINT"
     os.environ[env_var_name] = early_args.config
     print(f"Pre-import override: {env_var_name} = {early_args.config}")
@@ -52,7 +55,7 @@ parser.add_argument("--real-time", action="store_true", default=False, help="Run
 parser.add_argument("--config", type=str, default=None, 
                    help="Override robomimic config entry point (e.g., 'path.to.your.config:your_cfg.json')")
 parser.add_argument("--algo", type=str, default="diffusion_policy", help="Algorithm name for config override.")
-
+parser.add_argument("--eval", action="store_true",default=False,help="whether to enable evaluation config (overriding other settings like n_env)")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -78,6 +81,7 @@ from collections import deque
 import matplotlib.pyplot as plt
 from isaaclab.utils.math import quat_from_euler_xyz
 import torch
+import torch.nn.functional as F
 import yaml
 import numpy as np
 from tqdm import tqdm
@@ -95,6 +99,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions, clear_task_registry_cache
 from leap.utils import get_state_from_env as get_state_from_env_leap
 from allegro.utils import get_state_from_env as get_state_from_env_allegro
+from allegro.utils import get_goal_from_env as get_goal_from_env_allegro
+from evaluation import EpisodeEvaluator, NUM_EVAL_ENVS, NUM_EVAL_STEPS
 
 # Clear the task registry cache after setting environment variable
 # This ensures the override is applied when the registry is rebuilt
@@ -106,10 +112,17 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
 
+
+
 def main():
     """Play with RSL-RL agent."""
     
     ############################### CONFIG SETUP ############################### 
+
+    if args_cli.eval: 
+        print("WARNING: setting num_envs and n_steps to eval defaults (overriding cli)")
+        args_cli.num_envs = NUM_EVAL_ENVS
+        args_cli.n_steps = NUM_EVAL_STEPS
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
@@ -175,7 +188,6 @@ def main():
 
     n_steps = 0
     finished = False
-    rewards = np.array([])
 
     goal_zs = np.arange(-2*np.pi, 2*np.pi, args_cli.goal_z)
 
@@ -183,7 +195,17 @@ def main():
     buf_len = 50
     quat_buffer = deque(maxlen=50)
     cc_scores = []
-
+    
+    # Initialize per-episode evaluation tracking
+    num_envs = env_cfg.scene.num_envs
+    evaluator = EpisodeEvaluator(num_envs) if "allegro" in args_cli.task.lower() else None
+    
+    # Initialize progress bar
+    if args_cli.n_steps is not None:
+        pbar = tqdm(total=args_cli.n_steps, desc="Rollout Progress")
+    else:
+        pbar = tqdm(desc="Rollout Progress")
+    
     while simulation_app.is_running() and not finished:
 
         if "leap" in args_cli.task.lower():
@@ -197,14 +219,9 @@ def main():
             else:
                 goal_dict = None
         elif "allegro" in args_cli.task.lower():
-            print(f"DEBUG: obs_keys = {obs_keys}")
-            print(f"DEBUG: goal_keys = {goal_keys}")
-            print(f"DEBUG: obs keys = {list(obs.keys())}")
-            if 'policy' in obs:
-                print(f"DEBUG: obs['policy'] shape = {obs['policy'].shape}")
-            obs_dict, goal_dict = get_state_from_env_allegro(obs, obs_keys, goal_keys, device=args_cli.device)
-            print(f"DEBUG: obs_dict keys = {list(obs_dict.keys())}")
-            print(f"DEBUG: goal_dict = {goal_dict}")
+            obs_dict = get_state_from_env_allegro(obs['policy'], obs_keys, device=args_cli.device)
+            
+            goal_dict = get_goal_from_env_allegro(obs['policy'], goal_keys, device=args_cli.device)
         
         else:
             raise NotImplementedError(f"Task {args_cli.task} not implemented")
@@ -235,18 +252,26 @@ def main():
 
         obs, rew, terminated, truncated, extras = env.step(actions)
 
-        rewards = np.concatenate([rewards, rew.cpu().numpy()])
+        # Update evaluation tracking and check for episode completion
+        if evaluator and "allegro" in args_cli.task.lower():
+            evaluator.update_step_evaluation(obs_dict, goal_dict, rew)
+            evaluator.check_episode_completion(env, obs_dict, goal_dict, terminated)
 
         n_steps += 1
+        pbar.update(1)
 
         if args_cli.n_steps is not None and n_steps >= args_cli.n_steps:
             finished = True
         # After the loop, print the mean
     
-    print(f"Mean reward: {np.mean(rewards):.2f} over {n_steps} steps")
+    # Close progress bar
+    pbar.close()
+    
+    # Finalize any in-progress episodes and print evaluation results
+    if evaluator:
+        evaluator.finalize_all_episodes(obs_dict, goal_dict)
+        evaluator.print_evaluation_results()
 
-    plt.plot(goal_zs, cc_scores)
-    plt.savefig("cc_scores.png")
     env.close()
 
 
@@ -256,4 +281,4 @@ if __name__ == "__main__":
 
     main()
     # close sim app
-    simulation_app.close() 
+    simulation_app.close()
