@@ -14,8 +14,7 @@ isaaclab train_allegro.py --task=Isaac-Repose-Cube-Allegro-v0
 """Launch Isaac Sim Simulator first."""
 
 import argparse
-from re import X
-from socket import AF_X25
+
 import sys
 
 from isaaclab.app import AppLauncher
