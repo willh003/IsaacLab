@@ -5,6 +5,8 @@
 
 """Sub-module containing command terms for 3D orientation goals."""
 
-from .commands_cfg import InHandReOrientationCommandCfg, SuccessCountResetCommandCfg  # noqa: F401
+from .commands_cfg import InHandReOrientationCommandCfg, SuccessCountResetCommandCfg, TrajectoryCommandCfg, ContinuousSubgoalCommandCfg  # noqa: F401
 from .orientation_command import InHandReOrientationCommand  # noqa: F401
 from .success_count_reset_command import SuccessCountResetCommand  # noqa: F401
+from .trajectory_command import TrajectoryCommand  # noqa: F401
+from .continuous_subgoal_command import ContinuousSubgoalCommand  # noqa: F401

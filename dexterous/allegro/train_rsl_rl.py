@@ -14,6 +14,8 @@ isaaclab train_allegro.py --task=Isaac-Repose-Cube-Allegro-v0
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+from re import X
+from socket import AF_X25
 import sys
 
 from isaaclab.app import AppLauncher
@@ -177,6 +179,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # write git state to logs
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint
+
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
@@ -203,3 +206,7 @@ if __name__ == "__main__":
     main()
     # close sim app
     simulation_app.close()
+
+
+
+ 

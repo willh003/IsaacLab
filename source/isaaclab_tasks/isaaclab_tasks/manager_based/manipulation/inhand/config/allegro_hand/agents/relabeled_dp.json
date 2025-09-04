@@ -66,6 +66,7 @@
             }
         },
         "goal_mode": "relabel",
+        "goal_horizon": null,
         "cuda": true,
         "batch_size": 100,
         "num_epochs": 300,
@@ -149,32 +150,32 @@
                 "rgb": [],
                 "depth": [],
                 "scan": []     
+            }
+        },
+        "encoder": {
+            "low_dim": {
+                "core_class": null,
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
             },
-            "encoder": {
-                "low_dim": {
-                    "core_class": null,
-                    "core_kwargs": {},
-                    "obs_randomizer_class": null,
-                    "obs_randomizer_kwargs": {}
-                },
-                "rgb": {
-                    "core_class": "VisualCore",
-                    "core_kwargs": {},
-                    "obs_randomizer_class": null,
-                    "obs_randomizer_kwargs": {}
-                },
-                "depth": {
-                    "core_class": "VisualCore",
-                    "core_kwargs": {},
-                    "obs_randomizer_class": null,
-                    "obs_randomizer_kwargs": {}
-                },
-                "scan": {
-                    "core_class": "ScanCore",
-                    "core_kwargs": {},
-                    "obs_randomizer_class": null,
-                    "obs_randomizer_kwargs": {}
-                }
+            "rgb": {
+                "core_class": "VisualCore",
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            },
+            "depth": {
+                "core_class": "VisualCore",
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
+            },
+            "scan": {
+                "core_class": "ScanCore",
+                "core_kwargs": {},
+                "obs_randomizer_class": null,
+                "obs_randomizer_kwargs": {}
             }
         },
         "meta": {

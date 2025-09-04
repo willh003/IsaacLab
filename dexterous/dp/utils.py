@@ -8,16 +8,119 @@
 import importlib
 import json
 import os
+from typing_extensions import override
 import yaml
 import time
 import datetime
 import robomimic
 import torch
 import ast
+import argparse
 
+from robomimic.utils import obs_utils as ObsUtils
+from robomimic.utils import torch_utils as TorchUtils
+from robomimic.utils import file_utils as FileUtils
+from robomimic.algo import algo_factory, RolloutPolicy
 
 # Global registry cache
 _TASK_REGISTRY_CACHE = None
+
+
+ADDL_CONFIG_KEYS = ["goal_mode", "goal_horizon", "noise_groups", "mask_observations", "train_mask_prob", "uncond_weight"]
+def filter_config_dict(cfg, base_cfg):
+    """
+    Recursively filter out keys from cfg that are not present in base_cfg.
+    """
+    if not isinstance(cfg, dict) or not hasattr(base_cfg, 'keys'):
+        return cfg
+    filtered = {}
+    for k, v in cfg.items():
+        if k in base_cfg:
+            if isinstance(v, dict) and hasattr(base_cfg[k], 'keys'):
+                filtered[k] = filter_config_dict(v, base_cfg[k])
+            else:
+                filtered[k] = v
+        elif k in ADDL_CONFIG_KEYS:
+            filtered[k] = v
+    return filtered
+
+
+def dict_to_namespace(config_dict):
+    for key, value in config_dict.items():
+        if isinstance(value, dict):
+            config_dict[key] = dict_to_namespace(value)
+    return argparse.Namespace(**config_dict)
+
+def policy_from_checkpoint_override_cfg(device=None, ckpt_path=None, ckpt_dict=None, verbose=False, override_config=None):
+    """
+    From robomimic, but allow config override of policy
+
+    This function restores a trained policy from a checkpoint file or
+    loaded model dictionary.
+
+    Args:
+        device (torch.device): if provided, put model on this device
+
+        ckpt_path (str): Path to checkpoint file. Only needed if not providing @ckpt_dict.
+
+        ckpt_dict(dict): Loaded model checkpoint dictionary. Only needed if not providing @ckpt_path.
+
+        verbose (bool): if True, include print statements
+
+    Returns:
+        model (RolloutPolicy): instance of Algo that has the saved weights from
+            the checkpoint file, and also acts as a policy that can easily
+            interact with an environment in a training loop
+
+        ckpt_dict (dict): loaded checkpoint dictionary (convenient to avoid
+            re-loading checkpoint from disk multiple times)
+    """
+    ckpt_dict = FileUtils.maybe_dict_from_checkpoint(ckpt_path=ckpt_path, ckpt_dict=ckpt_dict)
+
+    # algo name and config from model dict
+    algo_name, _ = FileUtils.algo_name_from_checkpoint(ckpt_dict=ckpt_dict)
+    config, _ = FileUtils.config_from_checkpoint(algo_name=algo_name, ckpt_dict=ckpt_dict, verbose=verbose)
+
+    if override_config is not None:
+        filtered_config = filter_config_dict(override_config, config)
+
+        with config.unlocked():
+            config.update(filtered_config)
+
+    # read config to set up metadata for observation modalities (e.g. detecting rgb observations)
+    ObsUtils.initialize_obs_utils_with_config(config)
+
+    # shape meta from model dict to get info needed to create model
+    shape_meta = ckpt_dict["shape_metadata"]
+
+    # maybe restore observation normalization stats
+    obs_normalization_stats = ckpt_dict.get("obs_normalization_stats", None)
+    if obs_normalization_stats is not None:
+        assert config.train.hdf5_normalize_obs
+        for m in obs_normalization_stats:
+            for k in obs_normalization_stats[m]:
+                obs_normalization_stats[m][k] = np.array(obs_normalization_stats[m][k])
+
+    if device is None:
+        # get torch device
+        device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda)
+
+    # create model and load weights
+    model = algo_factory(
+        algo_name,
+        config,
+        obs_key_shapes=shape_meta["all_shapes"],
+        ac_dim=shape_meta["ac_dim"],
+        device=device,
+    )
+
+    model.deserialize(ckpt_dict["model"])
+    model.set_eval()
+    model = RolloutPolicy(model, obs_normalization_stats=obs_normalization_stats)
+    if verbose:
+        print("============= Loaded Policy =============")
+        print(model)
+    return model, ckpt_dict
 
 def clear_task_registry_cache():
     """Clear the task registry cache to force rebuild."""
@@ -158,7 +261,7 @@ def build_task_registry_from_files() -> dict:
     registry = {}
     
     # Find isaaclab_tasks directory
-    current_dir = os.path.dirname(__file__)  # dexterous/dp/
+    current_dir = os.path.dirname(os.path.abspath(__file__))  # dexterous/dp/
     repo_root = os.path.dirname(os.path.dirname(current_dir))  # IsaacLab/
     isaaclab_tasks_dir = os.path.join(repo_root, "source", "isaaclab_tasks", "isaaclab_tasks")
     
@@ -290,18 +393,65 @@ def detect_z_rotation_direction_batch(quaternions):
     return torch.sign(mean_omega_z)
 
 def load_action_normalization_params(checkpoint_path):
+    """Load action normalization parameters from checkpoint.
+    
+    Returns numpy arrays for per-dimension normalization.
+    Falls back to scalar values for backward compatibility.
+    """
+    import numpy as np
+    import ast
+    
     # Go up two directories and into logs/normalization_params.txt
     exp_dir = os.path.dirname(os.path.dirname(checkpoint_path))
     norm_file = os.path.join(exp_dir, "logs", "normalization_params.txt")
+    
     with open(norm_file, "r") as f:
         lines = f.readlines()
-        min_val = float(lines[0].split(":")[1].strip())
-        max_val = float(lines[1].split(":")[1].strip())
+        min_str = lines[0].split(":", 1)[1].strip()
+        max_str = lines[1].split(":", 1)[1].strip()
+        
+        try:
+            # Try to parse as list (per-dimension)
+            min_val = np.array(ast.literal_eval(min_str))
+            max_val = np.array(ast.literal_eval(max_str))
+        except (ValueError, SyntaxError):
+            # Fall back to scalar (backward compatibility)
+            min_val = np.array(float(min_str))
+            max_val = np.array(float(max_str))
+    
     return min_val, max_val
 
-def unnormalize_actions(actions, min_val, max_val):
+
+def save_action_normalization_params(log_dir, action_min, action_max):
+    """Save action normalization parameters alongside a checkpoint.
+    
+    Args:
+        log_dir: Directory to save parameters
+        action_min: Minimum values per dimension (scalar or array-like)
+        action_max: Maximum values per dimension (scalar or array-like)
+    """
+    import numpy as np
+    
+    # Convert to numpy arrays if needed
+    action_min = np.asarray(action_min)
+    action_max = np.asarray(action_max)
+    
+    norm_file = os.path.join(log_dir, "normalization_params.txt")
+    with open(norm_file, "w") as f:
+        f.write(f"min: {action_min.tolist()}\n")
+        f.write(f"max: {action_max.tolist()}\n")
+
+def unnormalize_actions(actions, min_val, max_val, device='cuda'):
     # actions: torch.Tensor or np.ndarray in [-1, 1]
+    actions = actions.to(device)
+    min_val = torch.as_tensor(min_val).to(device)
+    max_val = torch.as_tensor(max_val).to(device)
     return 0.5 * (actions + 1) * (max_val - min_val) + min_val
+
+def normalize_actions(actions, min_val, max_val):
+    # actions: torch.Tensor or np.ndarray in original range
+    # normalize to [-1, 1]
+    return 2.0 * (actions - min_val) / (max_val - min_val) - 1.0
 
 def count_parameters(model):
     """Count the total number of parameters in a PyTorch model."""

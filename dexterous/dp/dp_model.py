@@ -53,6 +53,334 @@ def algo_config_to_class(algo_config):
     else:
         raise RuntimeError()
 
+@register_algo_factory_func("flow_policy")
+def flow_algo_config_to_class(algo_config):
+    """
+    Maps algo config to the Flow Policy algo class to instantiate.
+
+    Args:
+        algo_config (Config instance): algo config
+
+    Returns:
+        algo_class: subclass of Algo
+        algo_kwargs (dict): dictionary of additional kwargs to pass to algorithm
+    """
+    
+    if algo_config.unet.enabled:
+        return FlowPolicyUNet, {}
+    elif algo_config.transformer.enabled:
+        raise NotImplementedError()
+    else:
+        raise RuntimeError()
+
+from diffusion_policy_nets import ForwardNoiseScheduler, FlowNoiseScheduler
+
+class MaskedObservationGroupEncoder(ObsNets.ObservationGroupEncoder):
+    """
+    Encodes observations with a mask.
+
+    "guidance_observations": 
+        {
+            "modalities": { 
+                "obs": {
+                    "low_dim": [
+                        "object_quat"
+                    ],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []     
+                },
+                "goal": {
+                    "low_dim": [
+                        "object_quat"
+                    ],
+                    "rgb": [],
+                    "depth": [],
+                    "scan": []     
+                }
+            }
+        },
+    """
+    def __init__(self, 
+        mask_observations,
+        observation_group_shapes,
+        feature_activation=nn.ReLU,
+        encoder_kwargs=None,
+        train_mask_prob=0.2
+    ):
+        super().__init__(observation_group_shapes, feature_activation, encoder_kwargs)
+        self.mask_observations = mask_observations
+        self.train_mask_prob = train_mask_prob
+    def forward(self, **kwargs):
+        """
+        Process each set of kwargs in its own observation group.
+        """
+
+        batch_size = kwargs['batch_size']
+        device = kwargs['device'] # type: ignore
+        
+        inference_mode = kwargs['inference_mode']
+
+        if inference_mode:
+            assert 'should_mask' in kwargs, "Error: should_mask must be set in kwargs for inference mode"
+            should_mask = kwargs['should_mask']
+        else:
+            # Train on randomly sampled timesteps, separate for each noise group
+            should_mask = torch.rand(batch_size, device=device) < self.train_mask_prob
+
+
+        modalities = self.mask_observations["modalities"]
+        obs_keys_to_mask = []
+        # Map specific (modality, observation_key) pairs to whether they should be masked
+        for modality, obs_types in modalities.items():
+            for obs_type in obs_types:
+                for obs_key in obs_types[obs_type]:
+                    key_pair = (modality, obs_key)
+                    obs_keys_to_mask.append(key_pair)
+
+        
+        outputs = []
+        # Process each observation group, masking some of the observations
+        for obs_group in self.observation_group_shapes:
+            # Pass through encoder first
+            group_enc = self.nets[obs_group].forward(kwargs[obs_group])
+            seq_len = group_enc.shape[0] // batch_size
+            assert seq_len * batch_size == group_enc.shape[0], f"seq_len * batch_size != group_enc.shape[0] - check your batch_size and observation_group_shapes"
+
+            # Check if any observations in this group need noise
+            if len(obs_keys_to_mask) > 0:
+                # Create a copy of the encoded group to modify                
+                # Calculate dimension offsets for each observation in the flattened encoding
+                dim_offset = 0
+                for obs_key, obs_shape in self.observation_group_shapes[obs_group].items():
+                    obs_dim = int(torch.prod(torch.tensor(obs_shape)))
+                    
+                    
+                    # Check if this observation should be masked
+                    key_pair = (obs_group, obs_key)
+                    if key_pair in obs_keys_to_mask:
+                        # Extract the portion of the encoding corresponding to this observation
+                        obs_encoding = group_enc[:, dim_offset:dim_offset + obs_dim]
+                        obs_encoding = obs_encoding.reshape(batch_size, seq_len, -1)  # (B*T, D) -> (B, T, D)
+                        obs_encoding[should_mask] = 0 # (B, T, D), with 0s for batches that are being masked
+                        obs_encoding = TensorUtils.join_dimensions(obs_encoding, 0, 1)
+
+                        group_enc[:, dim_offset:dim_offset + obs_dim] = obs_encoding
+
+                    dim_offset += obs_dim
+
+            outputs.append(group_enc)
+
+        return torch.cat(outputs, dim=-1)
+
+class NoisedObservationGroupEncoder(ObsNets.ObservationGroupEncoder):
+    """
+    questions:
+    - what beta schedule?
+       - squaredcos_cap_v2
+    - how often to add noise/how to sample t? 
+       - same as ddpm (uniform t)
+    - add noise before or after encoder?
+        - after encoder
+    - works for image noising, state not noised
+    """
+    def __init__(self, 
+        noise_groups,         
+        observation_group_shapes,
+        feature_activation=nn.ReLU,
+        encoder_kwargs=None,
+        num_train_timesteps=100,
+        beta_schedule="squaredcos_cap_v2",
+        ):
+        """        batch_size = kwargs['batch_size']
+        device = kwargs['device'] # type: ignore
+
+        # Build mapping from (modality, obs_key) to timesteps such that observations in the same noise group have the same timesteps
+        obs_timesteps_map = {}
+        noise_group_timesteps_list = []
+            "object_pos",
+                            "object_quat"
+                        ],
+                        "rgb": [],
+                        "depth": [],
+                        "scan": []
+                    }
+                }
+            },
+            {
+                "modalities": { 
+                    "goal": {
+                        "low_dim": [
+                            "object_pos",
+                            "object_quat"
+                        ],
+                        "rgb": [],
+                        "depth": [],
+                        "scan": []     
+                    }
+                }   
+            }
+        ],
+        observation_group_shapes example:
+        {
+            "obs": {
+                "image": (3, 120, 160)
+            }
+            "goal":
+            {
+                "object_quat": (4,)
+                "object_pos": (3,)
+            }
+        }
+        """
+        super().__init__( observation_group_shapes,feature_activation,encoder_kwargs)
+        
+
+        self.noise_scheduler = ForwardNoiseScheduler(
+            num_steps=num_train_timesteps,
+            beta_schedule=beta_schedule
+        )
+        self.noise_groups = noise_groups
+        self.num_train_timesteps = num_train_timesteps
+        
+
+    def forward(self, **kwargs):
+        """
+        Process each set of kwargs in its own observation group.
+
+        Args:
+            kwargs (dict): dictionary that maps observation groups to observation
+                dictionaries of torch.Tensor batches that agree with 
+                @self.observation_group_shapes. All observation groups in
+                @self.observation_group_shapes must be present, but additional
+                observation groups can also be present. Note that these are specified
+                as kwargs for ease of use with networks that name each observation
+                stream in their forward calls. Also contains other kwargs for the encoder.
+
+        Returns:
+            outputs (torch.Tensor): flat outputs of shape [B, D]
+        """
+
+        # ensure all observation groups we need are present
+        assert set(self.observation_group_shapes.keys()).issubset(kwargs), "{} does not contain all observation groups {}".format(
+            list(kwargs.keys()), list(self.observation_group_shapes.keys())
+        )
+        assert "inference_mode" in kwargs, "inference_mode must be set in kwargs for noised observation encoder"
+        assert "batch_size" in kwargs, "batch_size must be set in kwargs for noised observation encoder"
+        assert "device" in kwargs, "device must be set in kwargs for noised observation encoder"
+        
+        batch_size = kwargs['batch_size']
+        device = kwargs['device'] # type: ignore
+
+        # Build mapping from (modality, obs_key) to timesteps such that observations in the same noise group have the same timesteps
+        obs_timesteps_map = {}
+        noise_group_timesteps_list = []
+        
+        for i, noise_group in enumerate(self.noise_groups):
+            modalities = noise_group["modalities"]
+
+            if kwargs["inference_mode"]:
+                # Use set timestep for inference
+                assert 'noise_group_timesteps' in kwargs, "noise_group_timesteps must be set"
+                assert len(kwargs['noise_group_timesteps']) == len(self.noise_groups), "noise_group_timesteps must be the same length as noise_groups"
+                
+                noise_group_timestep = kwargs['noise_group_timesteps'][i]
+                timesteps = torch.ones(batch_size, device=device) * noise_group_timestep * self.num_train_timesteps
+                timesteps = timesteps.long()
+            else:
+                # Train on randomly sampled timesteps, separate for each noise group
+                timesteps = self.noise_scheduler.sample_timesteps(batch_size, device=device)
+
+            noise_group_timesteps_list.append(timesteps)
+            
+            # Map specific (modality, observation_key) pairs to their timesteps
+            for modality, obs_types in modalities.items():
+                for obs_type in obs_types:
+                    for obs_key in obs_types[obs_type]:
+                        key_pair = (modality, obs_key)
+                        assert key_pair not in obs_timesteps_map, f"{key_pair} already assigned timesteps - each observation should only be in one noise group"
+                        obs_timesteps_map[key_pair] = timesteps
+
+        outputs = []
+
+        # Process each observation group, noising the observations designated by their noise group
+        for obs_group in self.observation_group_shapes:
+            # Pass through encoder first
+            group_enc = self.nets[obs_group].forward(kwargs[obs_group])
+            
+            # Check if any observations in this group need noise
+            obs_keys_to_noise = [(modality, obs_key) for (modality, obs_key) in obs_timesteps_map.keys() if modality == obs_group]
+            
+            if len(obs_keys_to_noise) > 0:
+                seq_len = group_enc.shape[0] // batch_size
+                assert seq_len * batch_size == group_enc.shape[0], f"seq_len * batch_size != group_enc.shape[0] - check your batch_size and observation_group_shapes"
+                
+                # Create a copy of the encoded group to modify
+                group_noised_enc = group_enc.clone()
+                
+                # Calculate dimension offsets for each observation in the flattened encoding
+                dim_offset = 0
+                for obs_key, obs_shape in self.observation_group_shapes[obs_group].items():
+                    obs_dim = int(torch.prod(torch.tensor(obs_shape)))
+                    
+                    # Check if this observation should be noised
+                    key_pair = (obs_group, obs_key)
+                    if key_pair in obs_timesteps_map:
+                        timesteps = obs_timesteps_map[key_pair]
+                        
+                        # Expand timesteps to match sequence length
+                        timesteps_expanded = timesteps.unsqueeze(1)  # (B,1)          
+                        timesteps_seq = timesteps_expanded.repeat(1, seq_len)  # (B, T)
+                        timesteps_seq = TensorUtils.join_dimensions(timesteps_seq, 0, 1)  # (B * T,)
+                        if timesteps_seq.ndim == 1: 
+                            timesteps_seq = timesteps_seq.unsqueeze(-1)  # (B*T, 1)
+                        
+                        # Extract the portion of the encoding corresponding to this observation
+                        obs_encoding = group_enc[:, dim_offset:dim_offset + obs_dim]
+                        
+                        if obs_group == "goal":
+                            # Handle goal repetition for frame stacking
+                            obs_encoding = obs_encoding.reshape(batch_size, seq_len, -1)  # (B*T, D) -> (B, T, D)
+                            obs_encoding = obs_encoding[:, 0, ...]  # (B, T, D) -> (B, D) - take first timestep
+                            noised_obs_encoding = self.noise_scheduler(obs_encoding, timesteps)
+                            noised_obs_encoding = noised_obs_encoding.unsqueeze(1).repeat(1, seq_len, 1)  # (B,D) -> (B,T,D)
+                            noised_obs_encoding = TensorUtils.join_dimensions(noised_obs_encoding, 0, 1)  # (B,T,D) -> (B*T,D)
+                        else:
+                            noised_obs_encoding = self.noise_scheduler(obs_encoding, timesteps_seq)
+                        
+                        # Replace the portion of the encoding with the noised version
+                        group_noised_enc[:, dim_offset:dim_offset + obs_dim] = noised_obs_encoding
+                    
+                    dim_offset += obs_dim
+                
+                outputs.append(group_noised_enc)
+            else:
+                outputs.append(group_enc)
+
+        # Add timestep embeddings for each noise group
+        for i, timesteps in enumerate(noise_group_timesteps_list):
+            # Expand to match sequence dimension if needed
+            if len(outputs) > 0:
+                seq_len = outputs[0].shape[0] // batch_size
+                timesteps_expanded = timesteps.unsqueeze(1).repeat(1, seq_len)  # (B, T)
+                timesteps_seq = TensorUtils.join_dimensions(timesteps_expanded, 0, 1)  # (B * T,)
+                outputs.append(timesteps_seq.float().unsqueeze(-1) / self.num_train_timesteps)
+            else:
+                outputs.append(timesteps.float().unsqueeze(-1) / self.num_train_timesteps)
+        
+        return torch.cat(outputs, dim=-1)
+    
+    def output_shape(self):
+        """
+        Compute the output shape of this encoder.
+        """
+        feat_dim = 0
+        for obs_group in self.observation_group_shapes:
+            # get feature dimension of these keys
+            feat_dim += self.nets[obs_group].output_shape()[0]
+        
+        feat_dim += len(self.noise_groups)
+        return [feat_dim]
 
 class DiffusionPolicyUNet(PolicyAlgo):
     def _create_networks(self):
@@ -71,10 +399,30 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
 
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
-        obs_encoder = ObsNets.ObservationGroupEncoder(
-            observation_group_shapes=observation_group_shapes,
-            encoder_kwargs=encoder_kwargs,
-        )
+        
+        if 'noise_groups' in self.obs_config:
+            noise_groups = self.obs_config.noise_groups
+            # use same noise scheduler as action denoiser for now
+            obs_encoder = NoisedObservationGroupEncoder(
+                noise_groups=noise_groups,
+                observation_group_shapes=observation_group_shapes,
+                encoder_kwargs=encoder_kwargs,
+                num_train_timesteps=self.algo_config.ddpm.num_train_timesteps,
+                beta_schedule=self.algo_config.ddpm.beta_schedule
+            )
+        elif 'mask_observations' in self.obs_config:
+            mask_observations = self.obs_config.mask_observations
+            obs_encoder = MaskedObservationGroupEncoder(
+                mask_observations=mask_observations,
+                observation_group_shapes=observation_group_shapes,
+                encoder_kwargs=encoder_kwargs,
+                train_mask_prob=self.obs_config.train_mask_prob
+            )
+        else:
+            obs_encoder = ObsNets.ObservationGroupEncoder(
+                observation_group_shapes=observation_group_shapes,
+                encoder_kwargs=encoder_kwargs,
+            )
         # IMPORTANT!
         # replace all BatchNorm with GroupNorm to work with EMA
         # performance will tank if you forget to do this!
@@ -210,7 +558,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
             # encode obs
             inputs = {
                 "obs": batch["obs"],
-                "goal": batch["goal_obs"]
+                "goal": batch["goal_obs"],
             }
 
             #not_equal = torch.nonzero((inputs["obs"]["goal_pose"] - inputs["goal"]["goal_pose"])**2 > .0000001)
@@ -219,8 +567,9 @@ class DiffusionPolicyUNet(PolicyAlgo):
             for k in self.obs_shapes:
                 # first two dimensions should be [B, T] for inputs
                 assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])
-
-            obs_features = TensorUtils.time_distributed(inputs, self.nets["policy"]["obs_encoder"], inputs_as_kwargs=True)
+            
+            obs_features = TensorUtils.time_distributed(inputs=inputs, op=self.nets["policy"]["obs_encoder"], inference_mode=False, batch_size=B, device=self.device, inputs_as_kwargs=True)
+                        
             assert obs_features.ndim == 3  # [B, T, D]
 
             obs_cond = obs_features.flatten(start_dim=1)
@@ -302,7 +651,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
         self.action_queue = action_queue
         self.goal_queue = goal_queue
     
-    def get_action(self, obs_dict, goal_dict=None):
+    def get_action(self, obs_dict, goal_dict=None, noise_group_timesteps=None, mask_observations=False):
         """
         Get policy action outputs.
 
@@ -313,6 +662,8 @@ class DiffusionPolicyUNet(PolicyAlgo):
         Returns:
             action (torch.Tensor): action tensor [1, Da]
         """
+
+        # No conflicts with mask_observations
         # obs_dict: key: [1,D]
         To = self.algo_config.horizon.observation_horizon
         Ta = self.algo_config.horizon.action_horizon
@@ -334,7 +685,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
             # run inference
             # [B,T,Da]
-            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor, goal_dict=goal_dict_tensor)
+            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor, goal_dict=goal_dict_tensor, noise_group_timesteps=noise_group_timesteps, mask_observations=mask_observations)
             
             # [B,T,Da] -> [T,B,Da]
             action_sequence = action_sequence.permute(1,0,2)
@@ -353,7 +704,9 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # [B, Da]
         return action
         
-    def _get_action_trajectory(self, obs_dict, goal_dict=None):
+        # sometimes add noise to states
+        
+    def _get_action_trajectory(self, obs_dict, goal_dict=None, noise_group_timesteps=None, mask_observations=False):
         assert not self.nets.training
         To = self.algo_config.horizon.observation_horizon
         Ta = self.algo_config.horizon.action_horizon
@@ -381,7 +734,21 @@ class DiffusionPolicyUNet(PolicyAlgo):
             if inputs["obs"][k].ndim - 1 == len(self.obs_shapes[k]):
                 inputs["obs"][k] = inputs["obs"][k].unsqueeze(1)
             assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])
-        obs_features = TensorUtils.time_distributed(inputs, nets["policy"]["obs_encoder"], inputs_as_kwargs=True)
+
+            B = inputs["obs"][k].shape[0]
+        
+        # Encode observations with deterministic masking choice during inference
+        obs_features = TensorUtils.time_distributed(
+            inputs=inputs, 
+            op=nets["policy"]["obs_encoder"],
+            inference_mode=True, 
+            batch_size=B, 
+            device=self.device, 
+            should_mask=torch.ones(B, device=self.device, dtype=torch.bool) if mask_observations else torch.zeros(B, device=self.device, dtype=torch.bool),
+            noise_group_timesteps=noise_group_timesteps, 
+            inputs_as_kwargs=True
+        )
+        
         assert obs_features.ndim == 3  # [B, T, D]
         B = obs_features.shape[0]
         # reshape observation to (B,obs_horizon*obs_dim)
@@ -438,6 +805,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
             load_optimizers (bool): whether to load optimizers and lr_schedulers from the model_dict;
                 used when resuming training from a checkpoint
         """
+
         self.nets.load_state_dict(model_dict["nets"])
 
         # for backwards compatibility
@@ -513,6 +881,257 @@ def replace_bn_with_gn(
     )
     return root_module
 
+
+class FlowPolicyUNet(DiffusionPolicyUNet):
+    """
+    Flow Policy using rectified flow matching instead of diffusion.
+    Inherits from DiffusionPolicyUNet and reuses the same UNet architecture.
+    """
+    
+    def _create_networks(self):
+        """
+        Creates networks and places them into @self.nets.
+        Reuses most of the diffusion setup but replaces the noise scheduler.
+        """
+        # set up different observation groups for @MIMO_MLP
+        observation_group_shapes = OrderedDict()
+
+        # merge obs and goal shapes into observation_group_shapes["obs"]
+        observation_group_shapes["obs"] = OrderedDict(self.obs_shapes)
+
+        # TODO: super hacky by @will to avoid goal shape error
+        if len(self.goal_shapes) > 0:
+            observation_group_shapes["goal"] = OrderedDict(self.goal_shapes)
+
+        encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
+        
+        if 'noise_groups' in self.obs_config:
+            noise_groups = self.obs_config.noise_groups
+            # use same noise scheduler as action denoiser for now
+            obs_encoder = NoisedObservationGroupEncoder(
+                noise_groups=noise_groups,
+                observation_group_shapes=observation_group_shapes,
+                encoder_kwargs=encoder_kwargs,
+                num_train_timesteps=self.algo_config.flow.num_steps,
+                beta_schedule="linear"  # Not used in flow matching but kept for compatibility
+            )
+        elif 'guidance_groups' in self.obs_config:
+            mask_groups = self.obs_config.mask_groups
+            # use same noise scheduler as action denoiser for now
+            obs_encoder = NoisedObservationGroupEncoder(
+                mask_groups=mask_groups,
+                observation_group_shapes=observation_group_shapes,
+                encoder_kwargs=encoder_kwargs,
+                num_train_timesteps=self.algo_config.flow.num_steps,
+                beta_schedule="linear"  # Not used in flow matching but kept for compatibility
+            )
+        else:
+            obs_encoder = ObsNets.ObservationGroupEncoder(
+                observation_group_shapes=observation_group_shapes,
+                encoder_kwargs=encoder_kwargs,
+            )
+        # IMPORTANT!
+        # replace all BatchNorm with GroupNorm to work with EMA
+        # performance will tank if you forget to do this!
+        obs_encoder = replace_bn_with_gn(obs_encoder)
+        
+        obs_dim = obs_encoder.output_shape()[0]
+
+        # create network object
+        noise_pred_net = DPNets.ConditionalUnet1D(
+            input_dim=self.ac_dim,
+            global_cond_dim=obs_dim*self.algo_config.horizon.observation_horizon
+        )
+
+        # the final arch has 2 parts
+        nets = nn.ModuleDict({
+            "policy": nn.ModuleDict({
+                "obs_encoder": obs_encoder,
+                "noise_pred_net": noise_pred_net
+            })
+        })
+
+        nets = nets.float().to(self.device)
+        
+        # setup flow scheduler instead of diffusion scheduler
+        flow_scheduler = FlowNoiseScheduler(
+            num_steps=self.algo_config.flow.num_steps
+        )
+        
+        # setup EMA
+        ema = None
+        if self.algo_config.ema.enabled:
+            ema = EMAModel(model=nets, power=self.algo_config.ema.power)
+                
+        # set attrs
+        self.nets = nets
+        self.noise_scheduler = flow_scheduler  # Use flow scheduler instead
+        self.ema = ema
+        self.action_check_done = False
+        self.obs_queue = None
+        self.action_queue = None
+        self.goal_queue = None
+    
+    def train_on_batch(self, batch, epoch, validate=False):
+        """
+        Training on a single batch using flow matching loss.
+        """
+        To = self.algo_config.horizon.observation_horizon
+        Ta = self.algo_config.horizon.action_horizon
+        Tp = self.algo_config.horizon.prediction_horizon
+        action_dim = self.ac_dim
+        B = batch["actions"].shape[0]
+        
+        with TorchUtils.maybe_no_grad(no_grad=validate):
+            info = super(DiffusionPolicyUNet, self).train_on_batch(batch, epoch, validate=validate)
+            actions = batch["actions"]
+            
+            # encode obs
+            inputs = {
+                "obs": batch["obs"],
+                "goal": batch["goal_obs"],
+            }
+
+            for k in self.obs_shapes:
+                # first two dimensions should be [B, T] for inputs
+                assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])
+            
+            obs_features = TensorUtils.time_distributed(
+                inputs=inputs, 
+                op=self.nets["policy"]["obs_encoder"], 
+                inference_mode=False, 
+                batch_size=B, 
+                device=self.device, 
+                inputs_as_kwargs=True
+            )
+                        
+            assert obs_features.ndim == 3  # [B, T, D]
+
+            obs_cond = obs_features.flatten(start_dim=1)
+            
+            # sample noise and timesteps for flow matching
+            noise = torch.randn(actions.shape, device=self.device)
+            
+            # sample timesteps uniformly from [0, 1] for flow matching
+            timesteps = self.noise_scheduler.sample_timesteps(B, device=self.device)
+            
+            # get noisy actions and velocity targets using flow scheduler
+            noisy_actions = self.noise_scheduler.add_noise(actions, noise, timesteps)
+            velocity_target = self.noise_scheduler.get_velocity_target(actions, noise, timesteps)
+            
+            # predict the velocity field
+            velocity_pred = self.nets["policy"]["noise_pred_net"](
+                noisy_actions, timesteps, global_cond=obs_cond)
+            
+            # Flow matching loss: MSE between predicted and target velocity
+            loss = F.mse_loss(velocity_pred, velocity_target)
+            
+            # logging
+            losses = {
+                "flow_loss": loss
+            }
+            info["losses"] = TensorUtils.detach(losses)
+
+            if not validate:
+                # gradient step
+                policy_grad_norms = TorchUtils.backprop_for_loss(
+                    net=self.nets,
+                    optim=self.optimizers["policy"],
+                    loss=loss,
+                )
+                
+                # update Exponential Moving Average of the model weights
+                if self.ema is not None:
+                    self.ema.step(self.nets)
+                
+                step_info = {
+                    "policy_grad_norms": policy_grad_norms
+                }
+                info.update(step_info)
+
+        return info
+    
+    def log_info(self, info):
+        """
+        Process info dictionary from @train_on_batch to summarize
+        information to pass to tensorboard for logging.
+        """
+        log = super(DiffusionPolicyUNet, self).log_info(info)
+        log["Loss"] = info["losses"]["flow_loss"].item()
+        if "policy_grad_norms" in info:
+            log["Policy_Grad_Norms"] = info["policy_grad_norms"]
+        return log
+    
+    def _get_action_trajectory(self, obs_dict, goal_dict=None, noise_group_timesteps=None):
+        """
+        Get action trajectory using flow matching ODE integration.
+        """
+        assert not self.nets.training
+        To = self.algo_config.horizon.observation_horizon
+        Ta = self.algo_config.horizon.action_horizon
+        Tp = self.algo_config.horizon.prediction_horizon
+        action_dim = self.ac_dim
+        num_inference_steps = self.algo_config.flow.num_inference_steps
+        
+        # select network
+        nets = self.nets
+        if self.ema is not None:
+            nets = self.ema.averaged_model
+        
+        # encode obs
+        inputs = {
+            "obs": obs_dict,
+            "goal": goal_dict
+        }
+        for k in self.obs_shapes:
+            # first two dimensions should be [B, T] for inputs
+            if inputs["obs"][k].ndim - 1 == len(self.obs_shapes[k]):
+                inputs["obs"][k] = inputs["obs"][k].unsqueeze(1)
+            assert inputs["obs"][k].ndim - 2 == len(self.obs_shapes[k])
+
+            B = inputs["obs"][k].shape[0]
+        
+        obs_features = TensorUtils.time_distributed(
+            inputs=inputs, 
+            op=nets["policy"]["obs_encoder"],
+            inference_mode=True, 
+            batch_size=B, 
+            device=self.device, 
+            noise_group_timesteps=noise_group_timesteps, 
+            inputs_as_kwargs=True
+        )
+        
+        assert obs_features.ndim == 3  # [B, T, D]
+        B = obs_features.shape[0]
+        # reshape observation to (B,obs_horizon*obs_dim)
+        obs_cond = obs_features.flatten(start_dim=1)
+
+        # initialize from Gaussian noise
+        x = torch.randn((B, Tp, action_dim), device=self.device)
+        
+        # Flow matching ODE integration using Euler method
+        dt = 1.0 / num_inference_steps
+        
+        for i in range(num_inference_steps):
+            t = torch.ones(B, device=self.device) * (i * dt)
+            
+            # predict velocity field
+            velocity = nets["policy"]["noise_pred_net"](
+                sample=x,
+                timestep=t,
+                global_cond=obs_cond
+            )
+            
+            # Euler step: x_{t+dt} = x_t + dt * v_t
+            x = x + dt * velocity
+
+        # process action using Ta
+        start = To - 1
+        end = start + Ta
+        action = x[:, start:end]
+
+        return action
+
 class DiffusionPolicyConfig(BaseConfig):
     ALGO_NAME = "diffusion_policy"
 
@@ -587,3 +1206,28 @@ class DiffusionPolicyConfig(BaseConfig):
         self.algo.ddim.set_alpha_to_one = True
         self.algo.ddim.steps_offset = 0
         self.algo.ddim.prediction_type = 'epsilon'
+
+
+class FlowPolicyConfig(DiffusionPolicyConfig):
+    """
+    Config for Flow Policy algorithm.
+    Inherits from DiffusionPolicyConfig and modifies flow-specific parameters.
+    """
+    ALGO_NAME = "flow_policy"
+    
+    def algo_config(self):
+        """
+        Configure algorithm parameters for flow matching.
+        """
+        # Call parent config first
+        super().algo_config()
+        
+        # Flow matching specific parameters
+        self.algo.flow.enabled = True
+        self.algo.flow.num_steps = 100  # Number of timesteps for training
+        self.algo.flow.num_inference_steps = 50  # Number of ODE integration steps
+        
+        # Disable diffusion schedulers since we're using flow matching
+        self.algo.ddpm.enabled = False
+        self.algo.ddim.enabled = False
+

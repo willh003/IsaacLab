@@ -13,6 +13,8 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from .orientation_command import InHandReOrientationCommand
 from .success_count_reset_command import SuccessCountResetCommand
+from .trajectory_command import TrajectoryCommand
+from .continuous_subgoal_command import ContinuousSubgoalCommand
 
 
 @configclass
@@ -108,3 +110,129 @@ class SuccessCountResetCommandCfg(InHandReOrientationCommandCfg):
 
     # Disable automatic goal resampling
     update_goal_on_success: bool = False
+
+
+@configclass
+class TrajectoryCommandCfg(InHandReOrientationCommandCfg):
+    """Configuration for the trajectory 3D orientation command term.
+
+    This configuration creates a command that generates trajectory-like sequences by
+    adding small incremental rotations to the current goal when it's reached, rather
+    than sampling completely new random orientations.
+
+    Please refer to the :class:`TrajectoryCommand` class for more details.
+    """
+
+    class_type: type = TrajectoryCommand
+
+
+    use_predefined_reset: bool = False
+    """Whether to use a predefined orientation for resets.
+    
+    If True, the command will reset to a specific predefined orientation instead of sampling
+    random orientations. If False, random orientations will be sampled as before.
+    """
+
+    reset_orientation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Predefined Euler angles for resets (roll, pitch, yaw) in radians.
+    
+    This orientation will be used when resetting if use_predefined_reset is True.
+    Default is (0.0, 0.0, 0.0) which represents no rotation.
+    
+    - roll: Rotation around X-axis (left/right tilt)
+    - pitch: Rotation around Y-axis (forward/backward tilt)  
+    - yaw: Rotation around Z-axis (left/right turn)
+    """
+
+    successes_before_reset: int = 1
+    """Number of consecutive successes before resetting.
+    
+    After reaching the goal orientation this many times in a row, the environment will automatically
+    reset the object and robot joints and generate a new goal.
+    """
+
+    max_steps_without_subgoal: int = 10
+    """Maximum number of steps without reaching the current goal before resampling.
+    
+    This prevents the trajectory from getting stuck if the goal is not being reached.
+    """
+
+    lookahead_distance: float = 1.0
+    """Lookahead distance in radians for the carrot planner approach.
+    
+    This is the distance along the interpolation path that the immediate goal is set to.
+    """
+    # Enable automatic goal updating when success is reached
+    update_goal_on_success: bool = True
+
+    final_goal_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/Command/final_goal_marker",
+        markers={
+            "final_goal": sim_utils.UsdFileCfg(
+                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
+                scale=(1.0, 1.0, 1.0),
+            ),
+        },
+    )
+    """The configuration for the final goal pose visualization marker. Defaults to a larger DexCube marker."""
+
+    final_goal_marker_pos_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Position offset of the final goal marker from the object's final desired position.
+    
+    This helps distinguish the final goal marker from the immediate goal marker in visualization.
+    """
+
+
+@configclass
+class ContinuousSubgoalCommandCfg(InHandReOrientationCommandCfg):
+    """Configuration for the continuous subgoal command term.
+
+    This configuration creates a command that continuously generates new final goals when
+    the current final goal is reached, without triggering environment resets. The command
+    outputs subgoals (using lookahead distance) instead of final goals.
+
+    Key characteristics:
+    - Outputs subgoals instead of final goals for smooth trajectory following
+    - Samples new final goals when current final goal is reached
+    - Does NOT trigger environment resets on goal completion
+    - Only resets through normal termination conditions (timeout, object out of reach, max consecutive success)
+
+    Please refer to the :class:`ContinuousSubgoalCommand` class for more details.
+    """
+
+    class_type: type = ContinuousSubgoalCommand
+
+    max_steps_without_subgoal: int = 10
+    """Maximum number of steps without reaching the current subgoal before resampling.
+    
+    This prevents the trajectory from getting stuck if the subgoal is not being reached.
+    """
+
+    lookahead_distance: float = 0.4
+    """Lookahead distance in radians for the carrot planner approach.
+    
+    This is the distance along the interpolation path that the immediate subgoal is set to.
+    """
+
+    # Enable automatic goal updating when success is reached
+    update_goal_on_success: bool = True
+
+    final_goal_visualizer_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
+        prim_path="/Visuals/Command/final_goal_marker",
+        markers={
+            "final_goal": sim_utils.UsdFileCfg(
+                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/DexCube/dex_cube_instanceable.usd",
+                scale=(1.2, 1.2, 1.2),  # Slightly larger to distinguish from subgoal
+            ),
+        },
+    )
+    """The configuration for the final goal pose visualization marker."""
+
+    final_goal_marker_pos_offset: tuple[float, float, float] = (0.0, 0.2, 0.0)
+    """Position offset of the final goal marker from the object's final desired position.
+    
+    This helps distinguish the final goal marker from the immediate subgoal marker in visualization.
+    """
+
+    min_steps_in_subgoal: int = 20
+    """Minimum number of steps to stay in a subgoal before resampling."""

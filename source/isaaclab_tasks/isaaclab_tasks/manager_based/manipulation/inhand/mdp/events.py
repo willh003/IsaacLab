@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal
 from isaaclab.assets import Articulation
 from isaaclab.managers import EventTermCfg, ManagerTermBase, SceneEntityCfg
 from isaaclab.utils.math import sample_uniform
-
+import isaaclab.envs.mdp as mdp
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
@@ -255,7 +255,7 @@ def reset_robot_and_object_on_success_count(
             )
             
             # Reset object position
-            import isaaclab.envs.mdp as mdp
+           
             mdp.reset_root_state_uniform(
                 env=env,
                 env_ids=success_reset_env_ids,

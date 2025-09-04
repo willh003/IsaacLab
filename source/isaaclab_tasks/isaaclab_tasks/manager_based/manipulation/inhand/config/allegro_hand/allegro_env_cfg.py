@@ -18,6 +18,9 @@ import numpy as np
 # Pre-defined configs
 ##
 from isaaclab_assets import ALLEGRO_HAND_CFG  # isort: skip
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
+
 
 
 @configclass
@@ -28,6 +31,7 @@ class AllegroCubeEnvCfg(inhand_env_cfg.InHandObjectEnvCfg):
 
         # switch robot to allegro hand
         self.scene.robot = ALLEGRO_HAND_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
 
 
 @configclass
@@ -140,7 +144,8 @@ class AllegroCubeResetEnvCfg(AllegroCubeContactObsEnvCfg):
         )
 
 @configclass
-class AllegroCubeMultiResetEnvCfg(AllegroCubeContactObsEnvCfg):
+class AllegroCubeMultiResetEnvCfg(AllegroCubeEnvCfg):
+    #class AllegroCubeMultiResetEnvCfg(AllegroCubeContactObsEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
@@ -156,7 +161,7 @@ class AllegroCubeMultiResetEnvCfg(AllegroCubeContactObsEnvCfg):
             make_quat_unique=False,
             marker_pos_offset=(-0.2, -0.06, 0.08),
             debug_vis=True,
-            successes_before_reset=20, 
+            successes_before_reset=1, 
             # Option 1: Random orientation resets (default behavior)
             #use_predefined_reset=False,
             # Option 2: Predefined orientation resets
@@ -212,3 +217,116 @@ class AllegroCubeNoVelObsEnvCfg_PLAY(AllegroCubeNoVelObsEnvCfg):
         self.observations.policy.enable_corruption = False
         # remove termination due to timeouts
         self.terminations.time_out = None
+
+
+##
+# Environment configuration for trajectory following evaluation.
+##
+
+
+@configclass
+class AllegroCubeTrajectoryEnvCfg(AllegroCubeEnvCfg):
+    """Environment configuration for evaluating trajectory following capabilities.
+    
+    This configuration creates a trajectory-like sequence of goals by making small
+    incremental changes to the object orientation when the current goal is reached.
+    This is useful for evaluating goal-conditioned policies on trajectory following tasks.
+    """
+    def __post_init__(self):
+        # post init of parent
+        super().__post_init__()
+        
+        # Replace the command with the trajectory version
+        # This will add small rotations to the current goal when reached
+        self.commands.object_pose = mdp.TrajectoryCommandCfg(
+            asset_name="object",
+            init_pos_offset=(0.0, 0.0, -0.04),
+            orientation_success_threshold=0.2,  # Threshold for considering goal "reached"
+            make_quat_unique=False,
+            marker_pos_offset=(-0.2, -0.06, 0.08),               # add a small offset to the marker position 
+            final_goal_marker_pos_offset=(-0.2, 0.2, 0.08),
+            debug_vis=True,
+            update_goal_on_success=True,  # Enable goal updates when reached
+            successes_before_reset=1,
+            lookahead_distance=.4,
+            max_steps_without_subgoal=10
+        )
+
+
+        # Add event term for success count resets
+        # This will reset both joint and object positions when success count threshold is reached
+        from isaaclab.managers import EventTermCfg as EventTerm
+        
+        self.events.reset_robot_and_object_on_success = EventTerm(
+            func=mdp.reset_robot_and_object_on_success_count,
+            mode="interval",  # Check every step
+            interval_range_s=(0.0, 0.0),  # Check every step
+            params={
+                "command_name": "object_pose",
+                # Robot reset parameters
+                "position_range": {".*": [0.2, 0.2]},  # Same as regular reset
+                "velocity_range": {".*": [0.0, 0.0]},
+                "use_default_offset": True,
+                "operation": "scale",
+                # Object reset parameters
+                "pose_range": {"x": [-0.01, 0.01], "y": [-0.01, 0.01], "z": [-0.01, 0.01]},  # Same as regular reset
+                "object_velocity_range": {},
+            },
+        )
+
+        self.rewards.final_success_bonus = RewTerm(
+            func=mdp.final_success_bonus,
+            weight=500.0,
+            params={"object_cfg": SceneEntityCfg("object"), "command_name": "object_pose"},
+        )
+        
+        
+        self.rewards.track_orientation_inv_l2 = RewTerm(
+            func=mdp.track_orientation_inv_l2,
+            weight=0.5,
+            params={"object_cfg": SceneEntityCfg("object"), "rot_eps": 0.1, "command_name": "object_pose"},
+        )
+
+
+##
+# Environment configuration for continuous subgoal learning without resets.
+##
+
+
+@configclass
+class AllegroCubeContinuousEnvCfg(AllegroCubeEnvCfg):
+    """Environment configuration for continuous subgoal learning without environment resets.
+    
+    This configuration creates an environment that:
+    1. Outputs subgoals instead of final goals for smooth trajectory following  
+    2. Automatically samples new final goals when the current final goal is reached
+    3. Does NOT reset the environment when goals are reached
+    4. Only resets through normal termination conditions (timeout, object out of reach, max consecutive success)
+    
+    This is ideal for continuous learning scenarios where you want the agent to keep
+    manipulating the object through different orientations without interruption.
+    """
+    def __post_init__(self):
+        # post init of parent
+        super().__post_init__()        
+        # Replace the command with the continuous subgoal version
+        # This will output subgoals instead of final goals and continuously sample new final goals
+        self.commands.object_pose = mdp.ContinuousSubgoalCommandCfg(
+            asset_name="object",
+            init_pos_offset=(0.0, 0.0, -0.04),
+            orientation_success_threshold=0.08,  # Threshold for considering goal "reached"
+            make_quat_unique=False,
+            marker_pos_offset=(-0.2, -0.06, 0.08),  # Immediate subgoal marker position
+            final_goal_marker_pos_offset=(-0.2, 0.2, 0.08),  # Final goal marker position (offset to distinguish)
+            debug_vis=True,
+            update_goal_on_success=True,  # Enable goal updates when reached
+            lookahead_distance=0.3,  # Lookahead distance for subgoal generation
+            max_steps_without_subgoal=10,  # Max steps without progress before resampling subgoal
+        )
+
+
+        self.rewards.track_orientation_inv_l2 = RewTerm(
+            func=mdp.track_orientation_inv_l2,
+            weight=0.1,
+            params={"object_cfg": SceneEntityCfg("object"), "rot_eps": 0.5, "command_name": "object_pose"},
+        )

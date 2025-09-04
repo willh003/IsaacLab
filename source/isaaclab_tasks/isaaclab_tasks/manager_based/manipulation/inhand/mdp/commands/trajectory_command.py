@@ -1,0 +1,336 @@
+# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Sub-module containing command generators for 3D orientation goals with success count resets."""
+
+from __future__ import annotations
+
+import torch
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+import isaaclab.utils.math as math_utils
+from isaaclab.assets import RigidObject
+from isaaclab.managers import CommandTerm
+from isaaclab.markers.visualization_markers import VisualizationMarkers
+
+if TYPE_CHECKING:
+    from isaaclab.envs import ManagerBasedRLEnv
+
+    from .commands_cfg import TrajectoryCommandCfg
+
+
+class TrajectoryCommand(CommandTerm):
+    """Command term that generates 3D pose commands for in-hand manipulation task with success count resets.
+
+    This command term generates 3D orientation commands for the object. The orientation commands
+    are sampled uniformly from the 3D orientation space. The position commands are the default
+    root state of the object.
+
+    Unlike the base InHandReOrientationCommand, this version:
+    1. Tracks the number of consecutive successes for each environment
+    2. Resets both the object/joint state and generates a new goal after N consecutive successes
+    3. Does not automatically resample goals when reaching them
+
+    The constant position commands is to encourage that the object does not move during the task.
+    For instance, the object should not fall off the robot's palm.
+    """
+
+    cfg: TrajectoryCommandCfg
+    """Configuration for the command term."""
+
+    def __init__(self, cfg: TrajectoryCommandCfg, env: ManagerBasedRLEnv):
+        """Initialize the command term class.
+
+        Args:
+            cfg: The configuration parameters for the command term.
+            env: The environment object.
+        """
+        # initialize the base class
+        super().__init__(cfg, env)
+
+        # object
+        self.object: RigidObject = env.scene[cfg.asset_name]
+
+        # create buffers to store the command
+        # -- command: (x, y, z)
+        init_pos_offset = torch.tensor(cfg.init_pos_offset, dtype=torch.float, device=self.device)
+        self.pos_command_e = self.object.data.default_root_state[:, :3] + init_pos_offset
+        self.pos_command_w = self.pos_command_e + self._env.scene.env_origins
+        # -- orientation: (w, x, y, z)
+
+        self.subgoal_quat_command_w = torch.zeros(self.num_envs, 4, device=self.device)
+        self.subgoal_quat_command_w[:, 0] = 1.0  # set the scalar component to 1.0
+
+        self.final_quat_command_w = torch.zeros(self.num_envs, 4, device=self.device)
+        self.final_quat_command_w[:, 0] = 1.0  # set the scalar component to 1.0
+
+        self.max_steps_without_subgoal = cfg.max_steps_without_subgoal  # N=10 steps without reaching current goal
+        self.lookahead_distance = cfg.lookahead_distance # constant lookahead distance in radians
+        self.steps_without_reaching_subgoal = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+
+
+        # -- unit vectors
+        self._X_UNIT_VEC = torch.tensor([1.0, 0, 0], device=self.device).repeat((self.num_envs, 1))
+        self._Y_UNIT_VEC = torch.tensor([0, 1.0, 0], device=self.device).repeat((self.num_envs, 1))
+        self._Z_UNIT_VEC = torch.tensor([0, 0, 1.0], device=self.device).repeat((self.num_envs, 1))
+
+        self.metrics["subgoal_orientation_error"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["subgoal_position_error"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["consecutive_success"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["trajectory_steps"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["final_orientation_error"] = torch.zeros(self.num_envs, device=self.device)
+        
+        # -- success count reset tracking
+        self.metrics["success_count"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["should_reset"] = torch.zeros(self.num_envs, device=self.device)
+
+        self._reset_occurred = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._episode_ended = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+    def __str__(self) -> str:
+        msg = "SuccessCountResetCommand:\n"
+        msg += f"\tCommand dimension: {tuple(self.command.shape[1:])}\n"
+        msg += f"\tSuccesses before reset: {self.cfg.successes_before_reset}\n"
+        return msg
+
+    """
+    Properties
+    """
+
+    @property
+    def command(self) -> torch.Tensor:
+        """The desired goal pose in the environment frame. Shape is (num_envs, 7)."""
+        return torch.cat((self.pos_command_e, self.subgoal_quat_command_w), dim=-1)
+
+
+    @property
+    def final_command(self) -> torch.Tensor:
+        """The desired goal pose in the environment frame. Shape is (num_envs, 7)."""
+        return torch.cat((self.pos_command_e, self.final_quat_command_w), dim=-1)
+
+    """
+    Implementation specific functions.
+    """
+
+    @property
+    def reset_occurred(self):
+        """Get the reset indicator."""
+        return self._reset_occurred
+    
+    @property
+    def episode_ended(self):
+        """Get the episode ended indicator (for collect_rollouts.py)."""
+        return self._episode_ended
+
+    def _update_metrics(self):
+        # logs data
+        # -- compute the orientation error
+        self.metrics["subgoal_orientation_error"] = math_utils.quat_error_magnitude(
+            self.object.data.root_quat_w, self.subgoal_quat_command_w
+        )
+        # -- compute the position error
+        self.metrics["subgoal_position_error"] = torch.norm(self.object.data.root_pos_w - self.pos_command_w, dim=1)
+
+
+        # -- compute angular distance to final goal
+        self.metrics["final_orientation_error"] = math_utils.quat_error_magnitude(
+            self.object.data.root_quat_w, self.final_quat_command_w
+        )
+        
+        # -- check if goal is reached
+        goal_reached = self.metrics["final_orientation_error"] < self.cfg.orientation_success_threshold
+        # -- update success count
+        self.metrics["success_count"] += goal_reached.float()
+        
+        # -- check if we should reset (reached N consecutive successes)
+        self.metrics["should_reset"] = (self.metrics["success_count"] >= self.cfg.successes_before_reset).float()
+
+        # Set the persistent reset indicator for collect_rollouts to detect
+        reset_env_ids = self.metrics["should_reset"].nonzero(as_tuple=False).squeeze(-1)
+        self._reset_occurred[reset_env_ids] = True
+        
+        # -- compute the number of consecutive successes (for compatibility)
+        self.metrics["consecutive_success"] += goal_reached.float()
+
+    def _resample_command(self, env_ids: Sequence[int]):
+        if self.cfg.use_predefined_reset:
+            # Use predefined orientation for resets
+            # Convert Euler angles (roll, pitch, yaw) to quaternion
+            roll, pitch, yaw = self.cfg.reset_orientation
+            reset_quat = math_utils.quat_from_euler_xyz(
+                torch.tensor([roll], device=self.device),
+                torch.tensor([pitch], device=self.device), 
+                torch.tensor([yaw], device=self.device)
+            )
+            # Repeat for all environments that need reset
+            self.final_quat_command_w[env_ids] = reset_quat.repeat(len(env_ids), 1)
+        else:
+            # Sample new random orientation targets
+            rand_floats = 2.0 * torch.rand((len(env_ids), 2), device=self.device) - 1.0
+            # rotate randomly about x-axis and then y-axis
+            quat = math_utils.quat_mul(
+                math_utils.quat_from_angle_axis(rand_floats[:, 0] * torch.pi, self._X_UNIT_VEC[env_ids]),
+                math_utils.quat_from_angle_axis(rand_floats[:, 1] * torch.pi, self._Y_UNIT_VEC[env_ids]),
+            )
+            # make sure the quaternion real-part is always positive
+            self.final_quat_command_w[env_ids] = math_utils.quat_unique(quat) if self.cfg.make_quat_unique else quat
+        
+        # Reset the success count for these environments
+        self.metrics["success_count"][env_ids] = 0.0
+        self.metrics["should_reset"][env_ids] = 0.0
+
+        self._resample_subgoal(env_ids)
+
+    
+    def _resample_subgoal(self, env_ids: Sequence[int]):
+        """Update immediate goal with constant lookahead distance."""
+        # Get current object orientations as starting point
+        current_quat = self.object.data.root_quat_w[env_ids]
+        final_quat = self.final_quat_command_w[env_ids]
+        
+        # Calculate angular distance from current to final goal
+        angular_distance = math_utils.quat_error_magnitude(current_quat, final_quat)
+        
+        # Compute interpolation parameter based on constant lookahead
+        # If angular distance is less than lookahead, set goal to final goal
+        # Otherwise, set goal to lookahead distance along the path
+        t = torch.where(
+            angular_distance <= self.lookahead_distance,
+            torch.ones_like(angular_distance),  # Go to final goal
+            self.lookahead_distance / angular_distance  # Constant lookahead
+        )
+        t = torch.clamp(t, 0.0, 1.0)
+        
+        # Interpolate on the rotation manifold
+        interpolated_quat = self._slerp(current_quat, final_quat, t)
+        
+        # Set as immediate goal
+        self.subgoal_quat_command_w[env_ids] = interpolated_quat
+        
+
+    def _slerp(self, q0: torch.Tensor, q1: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """Spherical linear interpolation between two quaternions.
+        
+        Args:
+            q0: Starting quaternions (N, 4)
+            q1: Ending quaternions (N, 4) 
+            t: Interpolation parameter [0, 1] (N,)
+        
+        Returns:j
+            Interpolated quaternions (N, 4)
+        """
+        # Ensure t is the right shape
+        t = t.unsqueeze(-1)  # (N, 1)
+        
+        # Compute dot product
+        dot = torch.sum(q0 * q1, dim=-1, keepdim=True)
+        
+        # If dot product is negative, use -q1 to take shorter path
+        q1 = torch.where(dot < 0, -q1, q1)
+        dot = torch.abs(dot)
+        
+        # If quaternions are very close, use linear interpolation
+        linear_mask = dot > 0.9995
+        
+        # For linear interpolation
+        linear_result = q0 + t * (q1 - q0)
+        linear_result = linear_result / torch.norm(linear_result, dim=-1, keepdim=True)
+        
+        # For spherical interpolation
+        theta_0 = torch.acos(torch.clamp(dot, 0, 1))
+        sin_theta_0 = torch.sin(theta_0)
+        theta = theta_0 * t
+        sin_theta = torch.sin(theta)
+        
+        s0 = torch.cos(theta) - dot * sin_theta / sin_theta_0
+        s1 = sin_theta / sin_theta_0
+        
+        slerp_result = s0 * q0 + s1 * q1
+        
+        # Choose between linear and spherical interpolation
+        result = torch.where(linear_mask, linear_result, slerp_result)
+        
+        return result 
+
+    def clear_reset_indicator(self, env_ids: torch.Tensor):
+        """Clear the reset indicator for specified environments.
+        
+        This method is called by EventTerms after they have processed the reset
+        to prepare for the next reset detection.
+        
+        Args:
+            env_ids: Environment IDs to clear the reset indicator for.
+        """
+        self._reset_occurred[env_ids] = False 
+        
+    def clear_episode_ended_indicator(self, env_ids: torch.Tensor):
+        """Clear the episode ended indicator for specified environments.
+        
+        This method is called by collect_rollouts.py after it has detected an episode end
+        to prepare for the next episode detection.
+        
+        Args:
+            env_ids: Environment IDs to clear the episode ended indicator for.
+        """
+        self._episode_ended[env_ids] = False
+
+    def _update_command(self):
+        # Check if any environments should reset
+        reset_env_ids = (self.metrics["should_reset"] > 0.5).nonzero(as_tuple=False).squeeze(-1)
+        
+        if len(reset_env_ids) > 0:
+            # Resample goals for environments that need to reset
+            self._resample_command(reset_env_ids)
+            
+            # The reset_occurred flag is already set in _update_metrics
+            # External code (like collect_rollouts) will detect this and handle the reset
+
+        # Check if any environments should update the subgoal
+
+        subgoal_reached = self.metrics["subgoal_orientation_error"] < self.cfg.orientation_success_threshold
+        subgoal_not_reached = ~subgoal_reached
+
+        self.steps_without_reaching_subgoal[subgoal_not_reached] += 1
+        self.steps_without_reaching_subgoal[subgoal_reached] = 0  # Reset counter when goal is reached
+
+        resample_subgoal_on_timeout = self.steps_without_reaching_subgoal >= self.max_steps_without_subgoal  # Too many steps without progress
+        resampled_subgoal = subgoal_reached | resample_subgoal_on_timeout
+        resample_subgoal_ids = resampled_subgoal.nonzero(as_tuple=False).squeeze(-1)
+
+        if len(resample_subgoal_ids) > 0:
+            # Resample subgoals for environments that need to update
+            self._resample_subgoal(resample_subgoal_ids)
+        
+
+    def _set_debug_vis_impl(self, debug_vis: bool):
+        # set visibility of markers
+        # note: parent only deals with callbacks. not their visibility
+        if debug_vis:
+            # create immediate goal markers if necessary for the first time
+            if not hasattr(self, "goal_pose_visualizer"):
+                self.goal_pose_visualizer = VisualizationMarkers(self.cfg.goal_pose_visualizer_cfg)
+            # create final goal markers if necessary for the first time
+            if not hasattr(self, "final_goal_visualizer"):
+                self.final_goal_visualizer = VisualizationMarkers(self.cfg.final_goal_visualizer_cfg)
+            # set visibility
+            self.goal_pose_visualizer.set_visibility(True)
+            self.final_goal_visualizer.set_visibility(True)
+        else:
+            if hasattr(self, "goal_pose_visualizer"):
+                self.goal_pose_visualizer.set_visibility(False)
+            if hasattr(self, "final_goal_visualizer"):
+                self.final_goal_visualizer.set_visibility(False)
+
+    def _debug_vis_callback(self, event):
+        # Visualize immediate goal (subgoal)
+        subgoal_marker_pos = self.pos_command_w + torch.tensor(self.cfg.marker_pos_offset, device=self.device)
+        subgoal_marker_quat = self.subgoal_quat_command_w
+        self.goal_pose_visualizer.visualize(translations=subgoal_marker_pos, orientations=subgoal_marker_quat)
+        
+        # Visualize final goal
+        final_marker_pos = self.pos_command_w + torch.tensor(self.cfg.final_goal_marker_pos_offset, device=self.device)
+        final_marker_quat = self.final_quat_command_w
+        self.final_goal_visualizer.visualize(translations=final_marker_pos, orientations=final_marker_quat)

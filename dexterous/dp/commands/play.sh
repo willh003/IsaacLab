@@ -1,0 +1,3 @@
+#!/bin/bash
+
+/home/will/IsaacLab/isaaclab.sh -p /home/will/IsaacLab/dexterous/dp/play_il.py --task Isaac-Repose-Cube-Allegro-Contact-Multi-Reset-v0 --checkpoint /home/will/IsaacLab/dexterous/logs/dexterous/Isaac-Repose-Cube-Allegro-Contact-Multi-Reset-v0/test/20250902170206/models/ckpt_valid.pth --config /home/will/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/manipulation/inhand/config/allegro_hand/agents/noise_states_dp.json --algo diffusion_policy --headless --eval --noise_group_timesteps 0.0

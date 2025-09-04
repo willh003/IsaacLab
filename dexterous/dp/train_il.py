@@ -108,7 +108,7 @@ from robomimic.algo import algo_factory
 from robomimic.config import Config, config_factory
 from robomimic.utils.log_utils import DataLogger, PrintLogger
 
-from utils import load_cfg_from_registry_no_gym
+from utils import load_cfg_from_registry_no_gym, save_action_normalization_params, filter_config_dict
 
 
 import wandb
@@ -123,7 +123,9 @@ def normalize_hdf5_actions(config: Config, log_dir: str) -> str:
     Returns:
         Path to the normalized dataset.
     """
+    assert "normalized" not in config.train.data, "Dataset already normalized - use the unnormalized one here"
     base, ext = os.path.splitext(config.train.data)
+
     normalized_path = base + "_normalized" + ext
 
     # Copy the original dataset
@@ -134,27 +136,28 @@ def normalize_hdf5_actions(config: Config, log_dir: str) -> str:
     with h5py.File(normalized_path, "r+") as f:
         dataset_paths = [f"/data/demo_{str(i)}/actions" for i in range(len(f["data"].keys()))]
 
-        # Compute the min and max of the dataset
-        dataset = np.array(f[dataset_paths[0]]).flatten()
-        for i, path in enumerate(dataset_paths):
-            if i != 0:
-                data = np.array(f[path]).flatten()
-                dataset = np.append(dataset, data)
+        # Collect all actions to compute per-dimension min/max
+        all_actions = []
+        for path in dataset_paths:
+            data = np.array(f[path])  # Shape: [T, action_dim]
+            all_actions.append(data)
+        
+        # Stack all actions: [total_timesteps, action_dim]
+        all_actions = np.concatenate(all_actions, axis=0)
+        
+        # Compute per-dimension min/max
+        action_min = np.min(all_actions, axis=0)  # Shape: [action_dim]
+        action_max = np.max(all_actions, axis=0)  # Shape: [action_dim]
 
-        max = np.max(dataset)
-        min = np.min(dataset)
-
-        # Normalize the actions
-        for i, path in enumerate(dataset_paths):
-            data = np.array(f[path])
-            normalized_data = 2 * ((data - min) / (max - min)) - 1  # Scale to [-1, 1] range
+        # Normalize the actions per-dimension
+        for path in dataset_paths:
+            data = np.array(f[path])  # Shape: [T, action_dim]
+            normalized_data = 2 * ((data - action_min) / (action_max - action_min)) - 1  # Scale to [-1, 1] range
             del f[path]
             f[path] = normalized_data
 
         # Save the min and max values to log directory
-        with open(os.path.join(log_dir, "normalization_params.txt"), "w") as f:
-            f.write(f"min: {min}\n")
-            f.write(f"max: {max}\n")
+        save_action_normalization_params(log_dir, action_min, action_max)
 
     return normalized_path
 
@@ -285,6 +288,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         collate_fn=custom_collate_fn,
     )
 
+
     if config.experiment.validate:
         # cap num workers for validation dataset at 1
         num_workers = min(config.train.num_data_workers, 1)
@@ -293,7 +297,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
             dataset=validset,
             sampler=valid_sampler,
             batch_size=config.train.batch_size,
-            shuffle=(valid_sampler is None),
+            shuffle=False,
             num_workers=num_workers,
             drop_last=True,
             collate_fn=custom_collate_fn,
@@ -319,6 +323,8 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     wandb_tags = []
     if config["train"]["goal_mode"] is not None:
         wandb_tags.append(config["train"]["goal_mode"])
+    if config["train"]["goal_horizon"] is not None:
+        wandb_tags.append(f"h_{config['train']['goal_horizon']}")
     if config["algo_name"] == "diffusion_policy":
         wandb_tags.append("dp")
 
@@ -428,20 +434,6 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
     wandb.finish()
 
 
-def filter_config_dict(cfg, base_cfg):
-    """
-    Recursively filter out keys from cfg that are not present in base_cfg.
-    """
-    if not isinstance(cfg, dict) or not hasattr(base_cfg, 'keys'):
-        return cfg
-    filtered = {}
-    for k, v in cfg.items():
-        if k in base_cfg:
-            if isinstance(v, dict) and hasattr(base_cfg[k], 'keys'):
-                filtered[k] = filter_config_dict(v, base_cfg[k])
-            else:
-                filtered[k] = v
-    return filtered
 
 
 def main(args: argparse.Namespace):
@@ -463,7 +455,8 @@ def main(args: argparse.Namespace):
         config = config_factory(ext_cfg["algo_name"])
 
         filtered_ext_cfg = filter_config_dict(ext_cfg, config)
-        with config.values_unlocked():
+        # with config.values_unlocked():
+        with config.unlocked():
             config.update(filtered_ext_cfg)
     else:
         raise ValueError("Please provide a task name through CLI arguments.")
@@ -489,13 +482,13 @@ def main(args: argparse.Namespace):
     log_dir, ckpt_dir, video_dir = get_exp_dir(config.train.output_dir, config.experiment.name, config.experiment.save.enabled)
     
     if args.normalize_training_actions:
+        
         config.train.data = normalize_hdf5_actions(config, log_dir)
 
     # get torch device
     device = TorchUtils.get_torch_device(try_to_use_cuda=config.train.cuda)
 
     config.lock()
-
     # catch error during training and print it
     res_str = "finished run successfully!"
     try:

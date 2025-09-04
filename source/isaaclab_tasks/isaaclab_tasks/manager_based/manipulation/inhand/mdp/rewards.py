@@ -40,9 +40,37 @@ def success_bonus(
     threshold = command_term.cfg.orientation_success_threshold
     # calculate the orientation error
     dtheta = math_utils.quat_error_magnitude(asset.data.root_quat_w, goal_quat_w)
+    
 
     return dtheta <= threshold
 
+
+"""
+problem: policy moves too quickly, not smoothly
+- real problem: the optimal policy for this task isn't really a composition of short horizon behaviors that could be useful. it's fast motion and then stopping.
+"""
+
+
+def final_success_bonus(
+    env: ManagerBasedRLEnv, command_name: str, object_cfg: SceneEntityCfg = SceneEntityCfg("object")
+) -> torch.Tensor:
+    """Bonus reward for successfully reaching the final goal.
+    """
+    # extract useful elements
+    asset: RigidObject = env.scene[object_cfg.name]
+    command_term: InHandReOrientationCommand = env.command_manager.get_term(command_name)
+
+    # obtain the goal orientation
+    if hasattr(command_term, "final_command"):
+        goal_quat_w = command_term.final_command[:, 3:7]
+    else:
+        return torch.zeros(env.num_envs, device=env.device)
+    # obtain the threshold for the orientation error
+    threshold = command_term.cfg.orientation_success_threshold
+    # calculate the orientation error
+    dtheta = math_utils.quat_error_magnitude(asset.data.root_quat_w, goal_quat_w)
+    
+    return dtheta <= threshold
 
 def track_pos_l2(
     env: ManagerBasedRLEnv, command_name: str, object_cfg: SceneEntityCfg = SceneEntityCfg("object")

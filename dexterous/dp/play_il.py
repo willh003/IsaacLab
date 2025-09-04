@@ -44,6 +44,7 @@ parser.add_argument("--num_envs", type=int, default=8, help="Number of environme
 parser.add_argument("--n_steps", type=int, default=None, help="Number of steps to run.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--goal_z", type=float, default=None, help="Goal z rotation.")
+parser.add_argument("--noise_group_timesteps", type=float,nargs='+', default=None, help="Noise group timesteps.")
 
 #parser.add_argument("--checkpoint", type=str, default=None, help="Path to the rl policy checkpoint.")
 parser.add_argument(
@@ -56,6 +57,8 @@ parser.add_argument("--config", type=str, default=None,
                    help="Override robomimic config entry point (e.g., 'path.to.your.config:your_cfg.json')")
 parser.add_argument("--algo", type=str, default="diffusion_policy", help="Algorithm name for config override.")
 parser.add_argument("--eval", action="store_true",default=False,help="whether to enable evaluation config (overriding other settings like n_env)")
+
+parser.add_argument("--mask_observations", action="store_true", default=False, help="Mask observations.")
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -90,13 +93,14 @@ from isaaclab_tasks.utils.parse_cfg import load_cfg_from_registry
 # Robomimic imports
 # IMPORTANT: do not remove these, because they are required to register the diffusion policy
 from dp_model import DiffusionPolicyConfig, DiffusionPolicyUNet
+from robomimic.config import config_factory
 from robomimic.algo import RolloutPolicy
 import sys
 import os
 
 # TODO: hacky way to import get_state_from_env_leap
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions, clear_task_registry_cache
+from dp.utils import count_parameters, load_action_normalization_params, unnormalize_actions, clear_task_registry_cache, load_cfg_from_registry_no_gym, filter_config_dict, policy_from_checkpoint_override_cfg
 from leap.utils import get_state_from_env as get_state_from_env_leap
 from allegro.utils import get_state_from_env as get_state_from_env_allegro
 from allegro.utils import get_goal_from_env as get_goal_from_env_allegro
@@ -111,7 +115,6 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
-
 
 
 def main():
@@ -136,7 +139,22 @@ def main():
 
     print(f"[INFO]: Loading model checkpoint from: {checkpoint_path}")
     # policy_from_checkpoint returns (policy, ckpt_dict)
-    policy: RolloutPolicy = FileUtils.policy_from_checkpoint(ckpt_path=checkpoint_path, device=args_cli.device, verbose=True)[0]
+    
+    policy_config = None
+    if args_cli.config is not None:
+        cfg_entry_point_key = f"robomimic_{args_cli.algo}_cfg_entry_point"
+        task_name = args_cli.task.split(":")[-1]
+        ext_cfg = load_cfg_from_registry_no_gym(task_name, cfg_entry_point_key)
+        config = config_factory(ext_cfg["algo_name"])
+
+        filtered_ext_cfg = filter_config_dict(ext_cfg, config)
+        # with config.values_unlocked():
+        with config.unlocked():
+            config.update(filtered_ext_cfg)
+
+        policy_config = config
+
+    policy: RolloutPolicy = policy_from_checkpoint_override_cfg(ckpt_path=checkpoint_path, device=args_cli.device, verbose=True, override_config=policy_config)[0]
 
     # If it's a diffusion policy  count parameters in the noise prediction network
     if hasattr(policy.policy, 'nets') and 'policy' in policy.policy.nets:
@@ -172,7 +190,7 @@ def main():
     log_dir = os.path.dirname(checkpoint_path)
     if args_cli.video:
         video_kwargs = {
-            "video_folder": os.path.join(log_dir, "videos", "play"),
+            "video_folder": os.path.join(log_dir, "..", "videos", "play"),
             "step_trigger": lambda step: step == 0,
             "video_length": args_cli.video_length,
             "disable_logger": True,
@@ -245,10 +263,24 @@ def main():
 
         # Apply actions
         with torch.inference_mode():
-            actions = policy.policy.get_action(obs_dict=obs_dict, goal_dict=goal_dict)
+
+            if hasattr(args_cli, 'noise_group_timesteps'):
+                noise_group_timesteps = args_cli.noise_group_timesteps
+            else:
+                noise_group_timesteps = None
+            if hasattr(args_cli, 'mask_observations'):
+                mask_observations = args_cli.mask_observations
+            else:
+                mask_observations = False
+            
+            assert not (noise_group_timesteps is not None and mask_observations), "error: cannot use both noise_group_timesteps and mask_observations"
+            
+            actions = policy.policy.get_action(obs_dict=obs_dict, goal_dict=goal_dict, noise_group_timesteps=noise_group_timesteps, mask_observations=mask_observations)
             if is_dp:
                 min_val, max_val = action_norm_params
-                actions = unnormalize_actions(actions, min_val, max_val)
+                actions = unnormalize_actions(actions, min_val, max_val, device=args_cli.device)
+
+                
 
         obs, rew, terminated, truncated, extras = env.step(actions)
 

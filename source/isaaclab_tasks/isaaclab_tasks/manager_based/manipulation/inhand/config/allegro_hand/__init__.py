@@ -89,6 +89,41 @@ gym.register(
     },
 )
 
+"""
+isaaclab collect_rollouts.py --checkpoint /home/will/IsaacLab/dexterous/allegro/logs/rsl_rl/allegro_cube/2025-08-29_13-04-36/model_29997.pt --task Isaac-Repose-Cube-Allegro-Contact-Trajectory-v0 --headless --num_rollouts 1000
+
+"""
+gym.register(
+    id="Isaac-Repose-Cube-Allegro-Contact-Trajectory-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={ 
+        "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeTrajectoryEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:gcdp_cfg.json"),
+    },
+)
+
+gym.register(
+    id="Isaac-Repose-Cube-Allegro-Subgoals-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeContinuousEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:gcdp_cfg.json"),
+
+    },
+)
+
 
 gym.register(
     id="Isaac-Repose-Cube-Leap-v0",

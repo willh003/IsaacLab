@@ -12,7 +12,7 @@
         "save": {
             "enabled": true,
             "every_n_seconds": null,
-            "every_n_epochs": 50,
+            "every_n_epochs": null,
             "epochs": [],
             "on_best_validation": true,
             "on_best_rollout_return": false,
@@ -42,7 +42,7 @@
         "output_dir": "../diffusion_policy_trained_models",
         "normalize_weights_by_ds_size": false,
         "num_data_workers": 8,
-        "hdf5_cache_mode": "all",
+        "hdf5_cache_mode": "nongoal",
         "hdf5_use_swmr": true,
         "hdf5_load_next_obs": false,
         "hdf5_normalize_obs": false,
@@ -50,7 +50,7 @@
         "hdf5_validation_filter_key": "test",
         "seq_length": 4, 
         "pad_seq_length": false,
-        "frame_stack": 1,
+        "frame_stack": 2,
         "pad_frame_stack": true,
         "dataset_keys": [
             "actions",
@@ -65,11 +65,11 @@
                 "normalization": null
             }
         },
-        "goal_mode": null,
+        "goal_mode": "relabel",
         "goal_horizon": null,
         "cuda": true,
         "batch_size": 100,
-        "num_epochs": 10000,
+        "num_epochs": 300,
         "seed": 1,
         "max_grad_norm": null
     },
@@ -92,7 +92,7 @@
             }
         },
         "horizon": {
-            "observation_horizon": 1,
+            "observation_horizon": 2,
             "action_horizon": 2,
             "prediction_horizon": 4
         },
@@ -136,14 +136,21 @@
                 "low_dim": [
                     "robot0_joint_pos",
                     "object_pos",
-                    "object_quat",
-                    "goal_pose",
-                    "last_action"                    
+                    "object_quat"
                 ],
                 "rgb": [],
                 "depth": [],
                 "scan": []
-            }            
+            },
+            "goal": {
+                "low_dim": [
+                    "object_pos",
+                    "object_quat"
+                ],
+                "rgb": [],
+                "depth": [],
+                "scan": []     
+            }
         },
         "encoder": {
             "low_dim": {
@@ -170,11 +177,25 @@
                 "obs_randomizer_class": null,
                 "obs_randomizer_kwargs": {}
             }
+        },
+        "mask_observations": 
+            {
+                "modalities": { 
+                    "goal": {
+                        "low_dim": [
+                            "object_quat"
+                        ],
+                        "rgb": [],
+                        "depth": [],
+                        "scan": []     
+                    }
+                }
+            },
+        "train_mask_prob": 0.0,
+        "meta": {
+            "hp_base_config_file": null,
+            "hp_keys": [],
+            "hp_values": []
         }
-    },
-    "meta": {
-        "hp_base_config_file": null,
-        "hp_keys": [],
-        "hp_values": []
     }
 }

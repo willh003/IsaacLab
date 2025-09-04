@@ -13,6 +13,7 @@ from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
@@ -277,6 +278,11 @@ class RewardsCfg:
     joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-2.5e-5)
     action_l2 = RewTerm(func=mdp.action_l2, weight=-0.0001)
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    # joint_vel_l2 = RewTerm(func=mdp.joint_vel_l2, weight=-1e-4)
+    # action_l2 = RewTerm(func=mdp.action_l2, weight=-0.001)
+    # action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
+
+
 
     # -- optional penalties (these are disabled by default)
     # object_away_penalty = RewTerm(
@@ -301,6 +307,36 @@ class TerminationsCfg:
     # object_out_of_reach = DoneTerm(
     #     func=mdp.object_away_from_goal, params={"threshold": 0.24, "command_name": "object_pose"}
     # )
+
+
+@configclass
+class CurriculumCfg:
+    """Curriculum terms for the MDP."""
+
+    action_rate_l2 = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "action_rate_l2", "weight": -1e-1, "num_steps": 10000}
+    )
+
+    joint_vel_l2 = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "joint_vel_l2", "weight": -1e-1, "num_steps": 10000}
+    )
+
+    action_l2 = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "action_l2", "weight": -1e-1, "num_steps": 10000}
+    )
+
+
+    action_rate_l2_2 = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "action_rate_l2", "weight": -1, "num_steps": 20000}
+    )
+
+    joint_vel_l2_2 = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "joint_vel_l2", "weight": -1, "num_steps": 20000}
+    )
+
+    action_l2_2 = CurrTerm(
+        func=mdp.modify_reward_weight, params={"term_name": "action_l2", "weight": -1, "num_steps": 20000}
+    )
 
 
 ##
@@ -334,6 +370,7 @@ class InHandObjectEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
+
 
     def __post_init__(self):
         """Post initialization."""
