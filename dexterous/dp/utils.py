@@ -392,54 +392,65 @@ def detect_z_rotation_direction_batch(quaternions):
     
     return torch.sign(mean_omega_z)
 
+# def load_action_normalization_params(checkpoint_path):
+#     """Load action normalization parameters from checkpoint.
+    
+#     Returns numpy arrays for per-dimension normalization.
+#     Falls back to scalar values for backward compatibility.
+#     """
+#     import numpy as np
+#     import ast
+    
+#     # Go up two directories and into logs/normalization_params.txt
+#     exp_dir = os.path.dirname(os.path.dirname(checkpoint_path))
+#     norm_file = os.path.join(exp_dir, "logs", "normalization_params.txt")
+    
+#     with open(norm_file, "r") as f:
+#         lines = f.readlines()
+#         min_str = lines[0].split(":", 1)[1].strip()
+#         max_str = lines[1].split(":", 1)[1].strip()
+        
+#         try:
+#             # Try to parse as list (per-dimension)
+#             min_val = np.array(ast.literal_eval(min_str))
+#             max_val = np.array(ast.literal_eval(max_str))
+#         except (ValueError, SyntaxError):
+#             # Fall back to scalar (backward compatibility)
+#             min_val = np.array(float(min_str))
+#             max_val = np.array(float(max_str))
+    
+#     return min_val, max_val
+
+
+# def save_action_normalization_params(log_dir, action_min, action_max):
+#     """Save action normalization parameters alongside a checkpoint.
+    
+#     Args:
+#         log_dir: Directory to save parameters
+#         action_min: Minimum values per dimension (scalar or array-like)
+#         action_max: Maximum values per dimension (scalar or array-like)
+#     """
+#     import numpy as np
+    
+#     # Convert to numpy arrays if needed
+#     action_min = np.asarray(action_min)
+#     action_max = np.asarray(action_max)
+    
+#     norm_file = os.path.join(log_dir, "normalization_params.txt")
+#     with open(norm_file, "w") as f:
+#         f.write(f"min: {action_min.tolist()}\n")
+#         f.write(f"max: {action_max.tolist()}\n")
+
 def load_action_normalization_params(checkpoint_path):
-    """Load action normalization parameters from checkpoint.
-    
-    Returns numpy arrays for per-dimension normalization.
-    Falls back to scalar values for backward compatibility.
-    """
-    import numpy as np
-    import ast
-    
     # Go up two directories and into logs/normalization_params.txt
     exp_dir = os.path.dirname(os.path.dirname(checkpoint_path))
     norm_file = os.path.join(exp_dir, "logs", "normalization_params.txt")
-    
     with open(norm_file, "r") as f:
         lines = f.readlines()
-        min_str = lines[0].split(":", 1)[1].strip()
-        max_str = lines[1].split(":", 1)[1].strip()
-        
-        try:
-            # Try to parse as list (per-dimension)
-            min_val = np.array(ast.literal_eval(min_str))
-            max_val = np.array(ast.literal_eval(max_str))
-        except (ValueError, SyntaxError):
-            # Fall back to scalar (backward compatibility)
-            min_val = np.array(float(min_str))
-            max_val = np.array(float(max_str))
-    
+        min_val = float(lines[0].split(":")[1].strip())
+        max_val = float(lines[1].split(":")[1].strip())
     return min_val, max_val
 
-
-def save_action_normalization_params(log_dir, action_min, action_max):
-    """Save action normalization parameters alongside a checkpoint.
-    
-    Args:
-        log_dir: Directory to save parameters
-        action_min: Minimum values per dimension (scalar or array-like)
-        action_max: Maximum values per dimension (scalar or array-like)
-    """
-    import numpy as np
-    
-    # Convert to numpy arrays if needed
-    action_min = np.asarray(action_min)
-    action_max = np.asarray(action_max)
-    
-    norm_file = os.path.join(log_dir, "normalization_params.txt")
-    with open(norm_file, "w") as f:
-        f.write(f"min: {action_min.tolist()}\n")
-        f.write(f"max: {action_max.tolist()}\n")
 
 def unnormalize_actions(actions, min_val, max_val, device='cuda'):
     # actions: torch.Tensor or np.ndarray in [-1, 1]

@@ -399,7 +399,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
 
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
-        
+                
         if 'noise_groups' in self.obs_config:
             noise_groups = self.obs_config.noise_groups
             # use same noise scheduler as action denoiser for now

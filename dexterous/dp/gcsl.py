@@ -57,7 +57,7 @@ from robomimic.config import config_factory
 
 # Local imports
 from dp_model import DiffusionPolicyConfig, DiffusionPolicyUNet
-from utils import load_cfg_from_registry_no_gym, get_exp_dir, unnormalize_actions, load_action_normalization_params, save_action_normalization_params
+from utils import load_cfg_from_registry_no_gym, get_exp_dir, unnormalize_actions, load_action_normalization_params#, save_action_normalization_params
 from gcsl_dataset import gcsl_dataset_factory
 
 # Args
