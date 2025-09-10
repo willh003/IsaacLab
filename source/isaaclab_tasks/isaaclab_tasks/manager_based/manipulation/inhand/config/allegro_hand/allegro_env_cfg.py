@@ -32,13 +32,20 @@ class AllegroCubeEnvCfg(inhand_env_cfg.InHandObjectEnvCfg):
         # switch robot to allegro hand
         self.scene.robot = ALLEGRO_HAND_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-        from isaaclab.managers import EventTermCfg as EventTerm
-        self.events.episode_ended = EventTerm(
-            func=mdp.episode_ended_on_success_count,
-            mode="interval",
-            interval_range_s=(0.0, 0.0),
-            params={"command_name": "object_pose"},
-        )
+        # # from isaaclab.managers import EventTermCfg as EventTerm
+        # self.events.set_episode_success = EventTerm(
+        #     func=mdp.set_episode_success,
+        #     mode="interval",
+        #     interval_range_s=(0.0, 0.0),
+        #     params={"command_name": "object_pose"},
+        # )
+
+        # self.events.set_episode_failed = EventTerm(
+        #     func=mdp.set_episode_success,
+        #     mode="interval",
+        #     interval_range_s=(0.0, 0.0),
+        #     params={"command_name": "object_pose"},
+        # )
 
 @configclass
 class AllegroCubeEnvCfg_PLAY(AllegroCubeEnvCfg):

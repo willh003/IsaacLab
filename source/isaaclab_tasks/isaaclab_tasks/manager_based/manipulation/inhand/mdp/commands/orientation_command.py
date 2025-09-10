@@ -108,8 +108,8 @@ class InHandReOrientationCommand(CommandTerm):
         successes = self.metrics["orientation_error"] < self.cfg.orientation_success_threshold
         self.metrics["consecutive_success"] += successes.float()
 
-        reset_or_success_ids = successes.nonzero(as_tuple=False).squeeze(-1)
-        self._reset_or_success[reset_or_success_ids] = True
+        self._successes = successes.nonzero(as_tuple=False).squeeze(-1)
+
 
     def _resample_command(self, env_ids: Sequence[int]):
         # sample new orientation targets

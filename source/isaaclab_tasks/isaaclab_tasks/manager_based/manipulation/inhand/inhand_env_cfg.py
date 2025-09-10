@@ -221,7 +221,7 @@ class EventCfg:
             "num_buckets": 250,
         },
     )
-    object_scale_mass = EventTerm(
+    object_RigidObjectCfg_mass = EventTerm(
         func=mdp.randomize_rigid_body_mass,
         mode="startup",
         params={

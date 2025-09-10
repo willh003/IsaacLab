@@ -21,6 +21,10 @@ data = {
         'successes': 0.602,  # 60.2%
         'failures': 0.023,  # 2.3%
     }
+    '1k stay 20': {
+        'successes': 0.000,
+        'failures': 0.000,
+    }
 }
 
 

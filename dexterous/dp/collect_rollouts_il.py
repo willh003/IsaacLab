@@ -18,6 +18,19 @@ import os
 from utils import load_cfg_from_registry_no_gym, get_exp_dir, unnormalize_actions, load_action_normalization_params, filter_config_dict, policy_from_checkpoint_override_cfg
 from pathlib import Path
 
+OBS_INDICES = {
+    "robot0_joint_pos": (0, 16),
+    "robot0_joint_vel": (16, 32),
+    "object_pos": (32, 35),
+    "object_quat": (35, 39),
+    "object_lin_vel": (39, 42),
+    "object_ang_vel": (42, 45),
+    "goal_pose": (45, 52),
+    "goal_quat_diff": (52, 56),
+    "last_action": (56, 72),
+    "fingertip_contacts": (72, 76),
+}
+
 def parse_args_early():
     """Parse arguments early to set environment variables before imports."""
     parser = argparse.ArgumentParser()
@@ -51,7 +64,7 @@ parser.add_argument("--train_split", type=float, default=.8, help="Percent of st
 parser.add_argument("--output", type=str, default="rollouts.hdf5", help="Output HDF5 file for the dataset.")
 parser.add_argument("--num_envs", type=int, default=128, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
-parser.add_argument("--checkpoint", type=str, default=None, help="Path to the trained diffusion policy checkpoint.")
+# parser.add_argument("--checkpoint", type=str, default=None, help="Path to the trained diffusion policy checkpoint.")
 parser.add_argument("--config", type=str, default=None, help="Override robomimic config entry point")
 parser.add_argument("--algo", type=str, default="diffusion_policy", help="Algorithm name")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
@@ -60,6 +73,33 @@ parser.add_argument("--max_episode_length", type=int, default=100, help="Maximum
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 # append AppLauncher cli args
+
+def add_rsl_rl_args(parser: argparse.ArgumentParser):
+    """Add RSL-RL arguments to the parser.
+
+    Args:
+        parser: The parser to add the arguments to.
+    """
+    # create a new argument group
+    arg_group = parser.add_argument_group("rsl_rl", description="Arguments for RSL-RL agent.")
+    # -- experiment arguments
+    arg_group.add_argument(
+        "--experiment_name", type=str, default=None, help="Name of the experiment folder where logs will be stored."
+    )
+    arg_group.add_argument("--run_name", type=str, default=None, help="Run name suffix to the log directory.")
+    # -- load arguments
+    arg_group.add_argument("--resume", action="store_true", default=False, help="Whether to resume from a checkpoint.")
+    arg_group.add_argument("--load_run", type=str, default=None, help="Name of the run folder to resume from.")
+    arg_group.add_argument("--checkpoint", type=str, default=None, help="Checkpoint file to resume from.")
+    # -- logger arguments
+    arg_group.add_argument(
+        "--logger", type=str, default=None, choices={"wandb", "tensorboard", "neptune"}, help="Logger module to use."
+    )
+    arg_group.add_argument(
+        "--log_project_name", type=str, default=None, help="Name of the logging project when using wandb or neptune."
+    )
+add_rsl_rl_args(parser)
+
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if args_cli.video:
@@ -110,8 +150,8 @@ def _get_obs_keys(policy):
 def _prepare_policy_input(obs, policy, env):
 
     obs_keys, goal_keys = _get_obs_keys(policy)
-    obs_dict = get_state_from_env_allegro(obs['policy'], obs_keys, device=args_cli.device)
-    goal_dict = get_goal_from_env_allegro(obs['policy'], goal_keys, device=args_cli.device)
+    obs_dict = get_state_from_env_allegro(obs, obs_keys, device=args_cli.device)
+    goal_dict = get_goal_from_env_allegro(obs, goal_keys, device=args_cli.device)
 
     return obs_dict, goal_dict
 
@@ -227,35 +267,23 @@ def main():
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(task_name, args_cli)
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
-    ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=args_cli.device)
-    ppo_runner.load(args_cli.checkpoint)
-    policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
+    # ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=args_cli.device)
+    # ppo_runner.load(args_cli.checkpoint)
+    # policy = ppo_runner.get_inference_policy(device=env.unwrapped.device)
 
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
     
-    # wrap for video recording
-    log_dir = os.path.dirname(args_cli.checkpoint)
-    if args_cli.video:
-        video_kwargs = {
-            "video_folder": os.path.join(log_dir, "..", "videos", "play"),
-            "step_trigger": lambda step: step == 0,
-            "video_length": args_cli.video_length,
-            "disable_logger": True,
-        }
-        print("[INFO] Recording videos during training.")
-        env = gym.wrappers.RecordVideo(env, **video_kwargs)
-
-    # Load diffusion policy from checkpoint (returns RolloutPolicy wrapper)
+    # TODO: Load diffusion policy from checkpoint (returns RolloutPolicy wrapper)
     print(f"Loading diffusion policy from checkpoint: {args_cli.checkpoint}")    
-    policy_wrapper, ckpt_dict = policy_from_checkpoint_override_cfg(
+    policy_wrapper, _ = policy_from_checkpoint_override_cfg(
         ckpt_path=args_cli.checkpoint, 
         device=args_cli.device, 
         verbose=True, 
         override_config=policy_config
     )
     
-    # Load action normalization parameters
+    # # Load action normalization parameters
     action_norm_params = load_action_normalization_params(args_cli.checkpoint)
 
     # Prepare HDF5 dataset handler
@@ -277,7 +305,7 @@ def main():
     episodes_completed_by_reset = 0
     episodes_discarded_by_failure = 0
     
-    # policy_wrapper.start_episode()
+    policy_wrapper.start_episode()
     # obs, _ = env.reset()
     obs, _ = env.get_observations()
 
@@ -295,39 +323,24 @@ def main():
         pbar_desc = "Collecting rollouts"
     
     with tqdm(total=pbar_total, desc=pbar_desc) as pbar:
-        episode_steps = [0] * num_envs  # Track steps within current episode for each env
-        
         while simulation_app.is_running():
             start_time = time.time()
             with torch.inference_mode():
-                # Prepare policy input
+                #actions = policy(obs)
                 obs_dict, goal_dict = _prepare_policy_input(obs, policy_wrapper, env)
-                #actions = _get_policy_action(policy_wrapper, obs_dict, goal_dict, action_norm_params, args_cli.mask_observations)
-                actions = policy(obs)
+                actions = _get_policy_action(policy_wrapper, obs_dict, goal_dict, action_norm_params, args_cli.mask_observations)
                 
-
-                # Store observations and actions for each environment separately
+                # Add each env's data to its current episode
                 for i in range(num_envs):
-                    # Extract individual environment data from the processed observations
-                    env_obs_dict = _extract_env_data(obs_dict, i, num_envs)
-                    env_goal_dict = _extract_env_data(goal_dict, i, num_envs) if goal_dict is not None else {}
-                    env_action = _extract_env_data(actions, i, num_envs)
-                    
-                    # Add observations
-                    for key, value in env_obs_dict.items():
-                        current_episodes[i].add(f"obs/{key}", value.cpu())
-                    
-                    # Add goal observations  
-                    for key, value in env_goal_dict.items():
-                        current_episodes[i].add(f"obs/{key}", value.cpu())
-                    
-                    current_episodes[i].add("actions", env_action.cpu())
+                    for key, (start, end) in OBS_INDICES.items():
+                        current_episodes[i].add(f"obs/{key}", obs[i, start:end].cpu())
+                        
+                    current_episodes[i].add("actions", actions[i].cpu())
                     episode_step_counts[i] += 1
-                    episode_steps[i] += 1
                     
-                obs, rew, terminated, truncated, extras = env.step(actions)
+                obs, _, _, _ = env.step(actions)
                 
-                # Check for environment resets due to success count reset mechanism (successful episodes)
+                # Check for environment resets due to success count reset mechanism
                 env_reset = np.zeros(num_envs, dtype=bool)
                 command_term = env.unwrapped.command_manager.get_term("object_pose")
                 if hasattr(command_term, 'episode_ended'):
@@ -340,42 +353,24 @@ def main():
                 else:
                     print("[WARNING] Environment does not have 'episode_ended' attribute. Success count reset detection disabled.")
                 
-                # Check for terminations/truncations (failures)
-                env_failed = (terminated.cpu().numpy().astype(bool) | truncated.cpu().numpy().astype(bool)) & ~env_reset  # Failed if done but not due to success reset
-                
-                # Check for episode step limit reached
-                env_max_steps_reached = np.array([episode_steps[i] >= args_cli.max_episode_length for i in range(num_envs)])
-                
-                # Handle episode endings (both successful and failed)
+                # For environments where environment was reset, finalize current episode and start new one
                 episodes_completed_this_step = 0
                 for i in range(num_envs):
-                    episode_should_end = env_reset[i] or env_failed[i] or env_max_steps_reached[i]
+                    episode_should_end = env_reset[i] and episode_step_counts[i] > 10
                     
                     if episode_should_end:
-                        if env_reset[i] and episode_step_counts[i] > 10:
-                            # Successful episode - save it
+                        # Finalize current episode if it has data
+                        if episode_step_counts[i] > 0:
                             all_episodes.append(current_episodes[i])
                             episodes_completed_this_step += 1
-                            print(f"[INFO] Completed episode for env {i} with {episode_step_counts[i]} steps (success)")
+                            print(f"[INFO] Completed episode for env {i} with {episode_step_counts[i]} steps (env reset)")
                             episodes_completed_by_reset += 1
-                        elif env_max_steps_reached[i]:
-                            # Episode reached max steps - save it (could be partial success)
-                            all_episodes.append(current_episodes[i])
-                            episodes_completed_this_step += 1
-                            print(f"[INFO] Completed episode for env {i} with {episode_step_counts[i]} steps (max steps reached)")
-                        elif env_failed[i]:
-                            # Failed episode - don't save, just clear
-                            print(f"[DEBUG] Success not detected for env {i}:")
-                            print(f"  - Episode length: {episode_step_counts[i]} steps")
-                            
-                            if episode_step_counts[i] > 0:
-                                print(f"[INFO] Discarded failed episode for env {i} with {episode_step_counts[i]} steps (failure)")
-                                episodes_discarded_by_failure += 1
                         
-                        # Start new episode for this environment (regardless of success/failure/max steps)
+                        # Start new episode for this environment
                         current_episodes[i] = EpisodeData()
                         episode_step_counts[i] = 0
-                        episode_steps[i] = 0
+                
+                #prev_command_counter = command_counter.copy()
                 
             step_count += num_envs
 

@@ -124,6 +124,7 @@ class SuccessCountResetCommand(CommandTerm):
         # -- compute the number of consecutive successes (for compatibility)
         self.metrics["consecutive_success"] += goal_reached.float()
 
+
     def _resample_command(self, env_ids: Sequence[int]):
         if self.cfg.use_predefined_reset:
             # Use predefined orientation for resets

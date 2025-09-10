@@ -272,7 +272,7 @@ def reset_robot_and_object_on_success_count(
             command_term.clear_reset_indicator(success_reset_env_ids)
 
 
-def episode_ended_on_success_count(
+def set_episode_success(
     env: ManagerBasedEnv,
     env_ids: torch.Tensor,
     command_name: str,
