@@ -422,25 +422,6 @@ def detect_z_rotation_direction_batch(quaternions):
 #     return min_val, max_val
 
 
-# def save_action_normalization_params(log_dir, action_min, action_max):
-#     """Save action normalization parameters alongside a checkpoint.
-    
-#     Args:
-#         log_dir: Directory to save parameters
-#         action_min: Minimum values per dimension (scalar or array-like)
-#         action_max: Maximum values per dimension (scalar or array-like)
-#     """
-#     import numpy as np
-    
-#     # Convert to numpy arrays if needed
-#     action_min = np.asarray(action_min)
-#     action_max = np.asarray(action_max)
-    
-#     norm_file = os.path.join(log_dir, "normalization_params.txt")
-#     with open(norm_file, "w") as f:
-#         f.write(f"min: {action_min.tolist()}\n")
-#         f.write(f"max: {action_max.tolist()}\n")
-
 def load_action_normalization_params(checkpoint_path):
     # Go up two directories and into logs/normalization_params.txt
     exp_dir = os.path.dirname(os.path.dirname(checkpoint_path))
@@ -451,6 +432,14 @@ def load_action_normalization_params(checkpoint_path):
         max_val = float(lines[1].split(":")[1].strip())
     return min_val, max_val
 
+
+def save_action_normalization_params(log_dir, min_val, max_val):
+    """Save action normalization parameters to a text file."""
+    import os
+    norm_file = os.path.join(log_dir, "normalization_params.txt")
+    with open(norm_file, "w") as f:
+        f.write(f"min: {min_val}\n")
+        f.write(f"max: {max_val}\n")
 
 def unnormalize_actions(actions, min_val, max_val, device='cuda'):
     # actions: torch.Tensor or np.ndarray in [-1, 1]

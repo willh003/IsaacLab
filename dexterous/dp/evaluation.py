@@ -91,11 +91,13 @@ class EpisodeEvaluator:
         env_reset = np.zeros(self.num_envs, dtype=bool)
         command_term = env.unwrapped.command_manager.get_term("object_pose")
         
+
         if hasattr(command_term, 'episode_ended'):
             episode_ended = command_term.episode_ended.cpu().numpy()
             env_reset = episode_ended
             if env_reset.any():
                 reset_env_ids = np.where(env_reset)[0]
+                print(f"Episode ended in env {reset_env_ids}")
                 # Clear the episode_ended indicator after detecting it
                 command_term.clear_episode_ended_indicator(torch.tensor(reset_env_ids, device=env.unwrapped.device))
         
@@ -176,15 +178,7 @@ class EpisodeEvaluator:
         successful_episodes = [ep for ep in self.completed_episode_results if ep['successful']] # successful episodes
         failed_episodes = [ep for ep in self.completed_episode_results if ep['terminated']] # failed episodes
         incomplete_episodes = [ep for ep in self.completed_episode_results if not ep['terminated'] and not ep['successful']]
-        
-        print(f"\nPer-Episode Evaluation Results:")
-        print(f"  Number of eval envs: {self.num_envs}")
-        print(f"  Total episodes evaluated: {len(self.completed_episode_results)}")
-        print(f"  Successful episodes: {len(successful_episodes)}")
-        print(f"  Failed episodes: {len(failed_episodes)}")
-        print(f"  Incomplete episodes: {len(incomplete_episodes)}")
-        print(f"  Verification: {len(successful_episodes)} + {len(failed_episodes)} + {len(incomplete_episodes)} = {len(successful_episodes) + len(failed_episodes) + len(incomplete_episodes)} (should equal {self.num_envs})")
-        
+    
         # report metrics for non-failed epsidoes
         non_failed_episodes = successful_episodes + incomplete_episodes
         mean_episode_eval = np.mean([ep['mean_evaluation_signal'] for ep in non_failed_episodes])
@@ -200,6 +194,18 @@ class EpisodeEvaluator:
         mean_final_dist_deg = np.degrees(mean_final_dist)
         mean_distance_improvement_deg = np.degrees(mean_distance_improvement)
         mean_episode_eval_deg = np.degrees(mean_episode_eval)
+        
+        print(f"\nPer-Episode Evaluation Results:")
+        print(f"  Success rate: {len(successful_episodes) / len(self.completed_episode_results):.3f}")
+        print(f"  Failure rate: {len(failed_episodes) / len(self.completed_episode_results):.3f}")
+        print(f"  Mean final distance: {mean_final_dist_deg:.2f} degrees")
+
+        print(f"  Number of eval envs: {self.num_envs}")
+        print(f"  Total episodes evaluated: {len(self.completed_episode_results)}")
+        print(f"  Successful episodes: {len(successful_episodes)}")
+        print(f"  Failed episodes: {len(failed_episodes)}")
+        print(f"  Incomplete episodes: {len(incomplete_episodes)}")
+        print(f"  Verification: {len(successful_episodes)} + {len(failed_episodes)} + {len(incomplete_episodes)} = {len(successful_episodes) + len(failed_episodes) + len(incomplete_episodes)} (should equal {self.num_envs})")
         
         print(f"\nSuccessful and Incomplete Episode Rotational Distance Statistics (not including failed episodes):")
         print(f"  Mean episode length: {mean_episode_length:.1f} steps")

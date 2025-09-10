@@ -217,7 +217,6 @@ def main():
     # Initialize per-episode evaluation tracking
     num_envs = env_cfg.scene.num_envs
     evaluator = EpisodeEvaluator(num_envs) if "allegro" in args_cli.task.lower() else None
-    
     # Initialize progress bar
     if args_cli.n_steps is not None:
         pbar = tqdm(total=args_cli.n_steps, desc="Rollout Progress")
@@ -284,6 +283,9 @@ def main():
 
         obs, rew, terminated, truncated, extras = env.step(actions)
 
+        if terminated.any() or truncated.any():
+            policy.start_episode()
+
         # Update evaluation tracking and check for episode completion
         if evaluator and "allegro" in args_cli.task.lower():
             evaluator.update_step_evaluation(obs_dict, goal_dict, rew)
@@ -299,8 +301,10 @@ def main():
     # Close progress bar
     pbar.close()
     
-    # Finalize any in-progress episodes and print evaluation results
+    # Finalize a
+    # ny in-progress episodes and print evaluation results
     if evaluator:
+
         evaluator.finalize_all_episodes(obs_dict, goal_dict)
         evaluator.print_evaluation_results()
 

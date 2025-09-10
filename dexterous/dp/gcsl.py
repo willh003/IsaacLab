@@ -24,6 +24,21 @@ import os
 import sys
 import gymnasium as gym
 import gc
+import collections
+
+
+import signal
+import multiprocessing
+import atexit
+
+def cleanup():
+    # Force cleanup of multiprocessing resources
+    multiprocessing.active_children()  # Join any active processes
+
+signal.signal(signal.SIGINT, lambda s, f: (cleanup(), exit(0)))
+signal.signal(signal.SIGTERM, lambda s, f: (cleanup(), exit(0)))
+atexit.register(cleanup)
+
 
 def parse_args_early():
     """Parse arguments early to set environment variables before imports."""
@@ -57,8 +72,9 @@ from robomimic.config import config_factory
 
 # Local imports
 from dp_model import DiffusionPolicyConfig, DiffusionPolicyUNet
-from utils import load_cfg_from_registry_no_gym, get_exp_dir, unnormalize_actions, load_action_normalization_params#, save_action_normalization_params
-from gcsl_dataset import gcsl_dataset_factory
+from utils import load_cfg_from_registry_no_gym, get_exp_dir, unnormalize_actions, load_action_normalization_params, filter_config_dict, policy_from_checkpoint_override_cfg, save_action_normalization_params
+from optimized_gcsl_buffer import OptimizedGCSLBuffer
+from optimized_gcsl_dataset import optimized_gcsl_dataset_factory
 
 # Args
 from isaaclab.app import AppLauncher
@@ -72,10 +88,11 @@ parser.add_argument("--config", type=str, default=None, help="Override robomimic
 
 # GCSL hyperparameters
 parser.add_argument("--num_iterations", type=int, default=100, help="Number of GCSL iterations")
-parser.add_argument("--trajectories_per_iter", type=int, default=500, help="Trajectories to collect per iteration")
+parser.add_argument("--trajectories_per_iter", type=int, default=1000, help="Trajectories to collect per iteration")
 parser.add_argument("--train_epochs_per_iter", type=int, default=100, help="Training epochs per iteration")
-parser.add_argument("--buffer_size", type=int, default=10000, help="Replay buffer capacity")
-parser.add_argument("--max_episode_length", type=int, default=50, help="Maximum episode length")
+parser.add_argument("--buffer_size", type=int, default=20000, help="Replay buffer capacity")
+parser.add_argument("--max_episode_length", type=int, default=100, help="Maximum episode length")
+parser.add_argument("--mask_observations", action="store_true", default=False, help="Mask observations")
 
 # Environment settings
 parser.add_argument("--num_envs", type=int, default=128, help="Number of parallel environments")
@@ -86,7 +103,7 @@ default_log_dir = home_dir / "IsaacLab/dexterous/logs/gcsl"
 parser.add_argument("--log_dir", type=str, default=default_log_dir, help="Log directory")
 parser.add_argument("--save_checkpoints", action="store_true", default=True, help="Save model checkpoints")
 parser.add_argument("--load_initial_data", action="store_true", help="Load initial data from dataset")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
+parser.add_argument("--video", action="store_true", default=True, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument("--wandb", type=str, default="online", help="Wandb mode")
 
@@ -109,115 +126,7 @@ from leap.utils import get_state_from_env as get_state_from_env_leap
 
 import wandb
 
-
-class DataBuffer:
-    def __init__(self, capacity=1000, train_split=0.8):
-        """
-        self.train_trajectories is a deque of dicts, each dict is a trajectory with the following keys:
-        - obs: list of dicts, each dict is an observation
-        - actions: list of dicts, each dict is an action
-        - length: int, the length of the trajectory
-        """
-        self.train_trajectories: deque[dict] = deque(maxlen=int(capacity * train_split))
-        self.val_trajectories: deque[dict] = deque(maxlen=int(capacity * (1-train_split)))
-    
-    def get_trajectory(self, idx, is_val=False):
-        pass
-
-class GCSLBuffer(DataBuffer):
-    """Replay buffer for GCSL that stores complete trajectories for sequence-based learning."""
-    
-    def __init__(self, capacity=1000, action_norm_params=None, train_split=0.8):  # Store trajectory count, not individual transitions
-        super().__init__(capacity, train_split)
-        self.action_min, self.action_max = action_norm_params
-        self.train_split = train_split
-        
-    def add_trajectory(self, obs_traj, action_traj):
-        """Add a trajectory to the buffer.
-        
-        Args:
-            obs_traj: List of observations [T, obs_dim]
-            action_traj: List of actions [T-1, action_dim] (should be unnormalized)
-        """
-        # Update action normalization parameters with new data
-        # TODO: for now not updating these so it doesn't have a moving target
-        #self._update_action_normalization_params(action_traj)
-        
-        # Normalize actions before storing
-        normalized_action_traj = self._normalize_actions_for_storage(action_traj)
-
-        n_trajs = len(self.train_trajectories) + len(self.val_trajectories)
-        traj = {
-                'obs': obs_traj,
-                'actions': normalized_action_traj,
-                'length': len(obs_traj)
-            }
-
-        val_interval = int(1 / (1 - self.train_split))  # For 0.8 train_split: every 5th trajectory
-        if n_trajs % val_interval == (val_interval - 1):  # 0-indexed: 4, 9, 14, ... for interval=5
-            self.val_trajectories.append(traj)
-        else:
-            self.train_trajectories.append(traj)
-    
-    def get_trajectory(self, idx, is_val=False):
-        """Get a trajectory by index."""
-        if is_val:
-            return self.val_trajectories[idx]
-        else:
-            return self.train_trajectories[idx]
-
-
-    def len(self, is_val=False):
-        """Get the total number of trajectories."""
-        if is_val:
-            return len(self.val_trajectories)
-        else:
-            return len(self.train_trajectories)
-
-    def get_trajectories(self, is_val=False):
-        """Get all trajectories."""
-        if is_val:
-            return list(self.val_trajectories)
-        else:
-            return list(self.train_trajectories)
-
-    def _update_action_normalization_params(self, action_traj):
-        """Update action normalization parameters based on new trajectory data."""
-        if len(action_traj) == 0:
-            return
-            
-        # Stack all actions in trajectory
-        actions_tensor = torch.stack(action_traj, dim=0)  # [T-1, action_dim]
-        
-        # Compute min/max across timesteps
-        traj_min = torch.min(actions_tensor, dim=0)[0]  # [action_dim]
-        traj_max = torch.max(actions_tensor, dim=0)[0]  # [action_dim]
-        
-        self.action_min = torch.min(self.action_min, traj_min)
-        self.action_max = torch.max(self.action_max, traj_max)
-    
-    def _normalize_actions_for_storage(self, action_traj):
-        """Normalize actions to [-1, 1] range for storage."""
-        if len(action_traj) == 0:
-            return action_traj
-        
-        normalized_actions = []
-        for action in action_traj:
-            # Use utils.normalize_actions function
-            if self.action_min is not None and self.action_max is not None:
-                normalized_action = 2.0 * (action - self.action_min) / (self.action_max - self.action_min) - 1.0
-                normalized_actions.append(normalized_action)
-            else:
-                normalized_actions.append(action)
-        
-        return normalized_actions
-    
-    def get_action_normalization_params(self):
-        """Get current action normalization parameters."""
-        return self.action_min, self.action_max
-
-
-def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min_length=1, max_steps=200, is_dp=False):
+def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min_length=1, max_steps=200, is_dp=False, mask_observations=False):
     """Collect trajectories using the current policy and compute evaluation metrics."""
     # Record GPU memory at start of collection
     start_memory = get_gpu_memory_info()
@@ -242,10 +151,14 @@ def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min
             policy.start_episode()
             
             # Run episode steps
-            episode_data = _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_params)
+            episode_data = _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_params, mask_observations)
 
-            # Process completed episodes
+            total_count = 0
             for i, (obs_traj, action_traj, reward, length, success, failed) in enumerate(episode_data):
+                if failed:
+                    failed_count += 1
+                if success:  # Success
+                    success_count += 1
                 if not failed and len(obs_traj) > min_length:
                     # Save individual trajectory for this environment to buffer
                     buffer.add_trajectory(obs_traj, action_traj)
@@ -255,14 +168,12 @@ def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min
                     episode_rewards.append(reward)
                     episode_lengths.append(length)
                     
-                    if success:  # Success
-                        success_count += 1
 
-                    if failed:
-                        failed_count += 1
+                    total_count +=1
                     
                     pbar.update(1)
-
+            print(f"Collected {total_count} episodes")
+            print(f"Total trajectories length {len(trajectories)}")
     
     # Record GPU memory at end of collection
     end_memory = get_gpu_memory_info()
@@ -289,7 +200,7 @@ def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min
     return eval_results
 
 
-def _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_params):
+def _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_params, mask_observations=False):
     """Run one episode and return episode data for each environment."""
     # Initialize episode tracking
     obs_trajs = [[] for _ in range(num_envs)]
@@ -302,7 +213,7 @@ def _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_param
     for step in tqdm(range(max_steps)):
         # Get action from policy for all environments (needed for environment stepping)
         obs_dict, goal_dict = _prepare_policy_input(obs, policy, env)
-        action = _get_policy_action(policy, obs_dict, goal_dict, is_dp, action_norm_params)
+        action = _get_policy_action(policy, obs_dict, goal_dict, is_dp, action_norm_params, mask_observations)
         
         # Store observations and actions for each environment separately
         for i in range(num_envs):
@@ -325,9 +236,10 @@ def _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_param
                 episode_rewards[i] += reward[i].item()
                 episode_lengths[i] += 1
                 
-                # Check completion conditions
+                # Check completion conditions  
                 success[i] = _check_env_reset(env, i)
-                failed[i] = terminated[i].item() or truncated[i].item()
+                # Match evaluation.py logic: failed only if terminated but NOT successful
+                failed[i] = terminated[i].item() and not success[i]
         
     
     # Return episode data: (obs_traj, action_traj, reward, length, success, failed)
@@ -368,10 +280,10 @@ def _prepare_policy_input(obs, policy, env):
     return obs_dict, goal_dict
 
 
-def _get_policy_action(policy, obs_dict, goal_dict, is_dp, action_norm_params):
+def _get_policy_action(policy, obs_dict, goal_dict, is_dp, action_norm_params, mask_observations=False):
     """Get action from policy and handle normalization."""
     with torch.no_grad():
-        action = policy.policy.get_action(obs_dict=obs_dict, goal_dict=goal_dict)
+        action = policy.policy.get_action(obs_dict=obs_dict, goal_dict=goal_dict, mask_observations=mask_observations)
         
         # Unnormalize if needed
         if is_dp and action_norm_params is not None:
@@ -426,7 +338,7 @@ def collate_batch_for_training(batch):
     Actions in the batch are normalized (from buffer storage).
     Policy sees normalized actions for training.
     """
-    import collections
+    
     
     batch_out = collections.defaultdict(list)
     for item in batch:
@@ -475,12 +387,16 @@ def train_policy_iteration(policy, train_loader, val_loader, num_epochs=10):
     """Train the policy for one iteration using supervised learning.
     
     Policy trains on normalized actions (as stored in buffer).
+    Returns the best model state based on validation loss.
     """
     print(f"Train with {len(train_loader) * train_loader.batch_size} sequence samples and batch size {train_loader.batch_size}")
     print(f"Val with {len(val_loader) * val_loader.batch_size} sequence samples and batch size {val_loader.batch_size}")
 
+    best_val_loss = float('inf')
+    best_model_state = None
+    
     for epoch in range(num_epochs): 
-
+        
         step_log = TrainUtils.run_epoch(model=policy, data_loader=train_loader, epoch=epoch, num_steps=len(train_loader))
         # policy.on_epoch_end(epoch) # TODO: this handles lr scheduling, which we actually don't want rn
         
@@ -492,11 +408,28 @@ def train_policy_iteration(policy, train_loader, val_loader, num_epochs=10):
 
         
         with torch.no_grad():
-            step_log = TrainUtils.run_epoch(
+            val_step_log = TrainUtils.run_epoch(
                 model=policy, data_loader=val_loader, epoch=epoch, validate=True, num_steps=len(val_loader)
             )
+        
+        # Extract validation loss (usually 'Loss' key in the step_log)
+        val_loss = val_step_log.get('Loss', float('inf'))
+        
+        # Track best model based on validation loss
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            # Save best model to temporary file to avoid tensor reference issues
+            best_model_path = "/tmp/gcsl_best_model.pth"
+            torch.save(policy.serialize(), best_model_path)
+            print(f"New best validation loss: {best_val_loss:.6f} at epoch {epoch}")
+        
         # Log to wandb (no timing stats for val)
-        wandb.log({f"validation/{k}": v for k, v in step_log.items() if "time" not in k.lower()})
+        val_wandb_dict = {f"validation/{k}": v for k, v in val_step_log.items() if "time" not in k.lower()}
+        val_wandb_dict["validation/best_loss"] = best_val_loss
+        wandb.log(val_wandb_dict)
+    
+    print(f"Training complete. Best validation loss: {best_val_loss:.6f}")
+    return "/tmp/gcsl_best_model.pth" if best_val_loss < float('inf') else None
 
 def get_gpu_memory_info():
     """Get GPU memory information for monitoring OOM issues."""
@@ -520,6 +453,8 @@ def get_gpu_memory_info():
 def gcsl_main():
     """Main GCSL training loop."""
     
+
+
     # Load configuration
     task_name = args_cli.task.split(":")[-1]
     cfg_entry_point_key = f"robomimic_{args_cli.algo}_cfg_entry_point"
@@ -527,11 +462,19 @@ def gcsl_main():
     print(f"Loading configuration for task: {task_name}")
     ext_cfg = load_cfg_from_registry_no_gym(args_cli.task, cfg_entry_point_key)
     config = config_factory(ext_cfg["algo_name"])
-    
+
+    filtered_ext_cfg = filter_config_dict(ext_cfg, config)
     # Update config with external config
-    with config.values_unlocked():
-        config.update(ext_cfg)
-    
+    with config.unlocked():
+        config.update(filtered_ext_cfg)
+
+
+    # if config overrided in args, use it for the policy
+    if args_cli.config is not None:
+        policy_config = config
+    else:
+        policy_config = None
+
     # Set up experiment directory
     config.train.output_dir = os.path.abspath(os.path.join("./logs", args_cli.log_dir, args_cli.task))
     log_dir, ckpt_dir, video_dir = get_exp_dir(config.train.output_dir, config.experiment.name, config.experiment.save.enabled)
@@ -572,23 +515,6 @@ def gcsl_main():
         mode=args_cli.wandb,
         tags=wandb_tags
     )
-    """
-
-    -> if config.experiment.validate:
-    (Pdb) x = next(iter(train_loader))
-    (Pdb) y = trainset[0]
-    (Pdb) y.keys()
-    dict_keys(['actions', 'rewards', 'dones', 'obs'])
-    (Pdb) y['obs'].keys()
-    dict_keys(['goal_pose', 'last_action', 'object_pos', 'object_quat', 'robot0_joint_pos'])
-    (Pdb) x.keys()
-    dict_keys(['actions', 'rewards', 'dones', 'obs', 'goal_obs'])
-    (Pdb) x['obs'].keys()
-    dict_keys(['goal_pose', 'last_action', 'object_pos', 'object_quat', 'robot0_joint_pos'])
-    (Pdb) x['goal_obs'].keys()
-    dict_keys([])
-
-    """
     
     # Set up environment
     env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
@@ -604,32 +530,39 @@ def gcsl_main():
         print("[INFO] Recording videos during training.")
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
+
     # Load policy from checkpoint (returns RolloutPolicy wrapper)
     print(f"Loading initial policy from checkpoint: {args_cli.initial_policy}")    
     is_dp = "diffusion" in args_cli.algo.lower()    
-    policy_wrapper, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=args_cli.initial_policy, device=args_cli.device, verbose=True)
+    policy_wrapper, ckpt_dict = policy_from_checkpoint_override_cfg(ckpt_path=args_cli.initial_policy, device=args_cli.device, verbose=True, override_config=policy_config)
     obs_keys, goal_keys = _get_obs_keys(policy_wrapper)
     shape_meta = ckpt_dict["shape_metadata"]
     env_meta = ckpt_dict["env_metadata"]
     raw_policy = policy_wrapper.policy
+    action_norm_params = load_action_normalization_params(args_cli.initial_policy)
+
+    # env_meta = FileUtils.get_env_metadata_from_dataset(dataset_path=config.train.data)
+    # shape_meta = FileUtils.get_shape_metadata_from_dataset(
+    #     dataset_path=config.train.data, all_obs_keys=config.all_obs_keys, verbose=True
+    # )
+    # obs_keys = shape_meta["all_obs_keys"]
 
     
+    buffer = OptimizedGCSLBuffer(capacity=args_cli.buffer_size, action_norm_params=action_norm_params)
+
+    # TODO: change this to the policy rollout model (this is for debugging)
+    raw_policy = algo_factory(
+        algo_name=config.algo_name,
+        config=config,
+        obs_key_shapes=shape_meta["all_shapes"],
+        ac_dim=shape_meta["ac_dim"],
+        device=args_cli.device,
+    )
+
     print(f"Initialized policy: {config.algo_name}")
     print(f"Model parameters: {sum(p.numel() for p in raw_policy.nets.parameters()):,}")
     print(f"Policy nets training mode: {raw_policy.nets.training}")
         
-    action_norm_params = load_action_normalization_params(args_cli.initial_policy)
-    buffer = GCSLBuffer(capacity=args_cli.buffer_size, action_norm_params=action_norm_params)
-
-    # TODO: change this to the policy rollout model (this is for debugging)
-    # model_to_train = algo_factory(
-    #     algo_name=config.algo_name,
-    #     config=config,
-    #     obs_key_shapes=shape_meta["all_shapes"],
-    #     ac_dim=shape_meta["ac_dim"],
-    #     device=args_cli.device,
-    # )
-    model_to_train = raw_policy
 
     # Save the min and max values to log directory for compatibility
     min_val, max_val = action_norm_params
@@ -644,11 +577,19 @@ def gcsl_main():
         print(f"\n=== GCSL Iteration {iteration + 1}/{args_cli.num_iterations} ===")
         print("Collecting trajectories and evaluating policy...")
         
+        if iteration > 0: # after first iteration, use the newly trained policy instead of the checkpoint
+            policy_wrapper = RolloutPolicy(raw_policy)
+
         # 1. Collect trajectories and evaluate policy simultaneously
-        raw_policy.set_eval()
-        raw_policy.nets.eval()
-        eval_results = collect_trajectories_and_evaluate(env, policy_wrapper, buffer, args_cli.trajectories_per_iter, min_length=config.train.seq_length, max_steps=args_cli.max_episode_length, is_dp=is_dp)    
-        
+        # raw_policy.set_eval()
+        # raw_policy.nets.eval()
+        eval_results = collect_trajectories_and_evaluate(env, policy_wrapper, buffer, 
+                                                        args_cli.trajectories_per_iter, 
+                                                        min_length=config.train.seq_length, 
+                                                        max_steps=args_cli.max_episode_length, 
+                                                        is_dp=is_dp, 
+                                                        mask_observations=args_cli.mask_observations)    
+                                                        
         # Print and log evaluation results
         print(f"Evaluation - Mean Reward: {eval_results['mean_reward']:.3f} ± {eval_results['std_reward']:.3f}")
         print(f"             Success Rate: {eval_results['success_rate']:.3f}")
@@ -670,31 +611,56 @@ def gcsl_main():
         }
         wandb.log(log_dict)
         
-        # 2. Train policy on buffer data
-        assert buffer.len(is_val=False) >= config.train.batch_size, "Not enough data to train"
-        # Ensure policy is in training mode before training
-        raw_policy.set_train()
-        raw_policy.nets.train()
+        # After first iteration, freeze validation set to only use initial policy data
+        if iteration == 0:
+            buffer.end_initial_policy_phase()
         
-        trainset = gcsl_dataset_factory(buffer, config, obs_keys, is_val=False)
-        valset = gcsl_dataset_factory(buffer, config, obs_keys, is_val=True)
+        # 2. Train policy on buffer data
+        # Ensure policy is in training mode before training
+        # raw_policy.set_train()
+        # raw_policy.nets.train()
+        
+        trainset = optimized_gcsl_dataset_factory(buffer, config, obs_keys, is_val=False)
+        valset = optimized_gcsl_dataset_factory(buffer, config, obs_keys, is_val=True)
+        
+
         # Use num_workers=0 to avoid CUDA context issues with multiprocessing when data contains CUDA tensors
         train_loader = DataLoader(trainset, batch_size=config.train.batch_size, shuffle=True, collate_fn=collate_batch_for_training, num_workers=0, drop_last=True)
         val_loader = DataLoader(valset, batch_size=config.train.batch_size, shuffle=False, collate_fn=collate_batch_for_training, num_workers=0, drop_last=True)
 
+        # Reinitiate raw policy (prevent local minima)
+        raw_policy = algo_factory(
+            algo_name=config.algo_name,
+            config=config,
+            obs_key_shapes=shape_meta["all_shapes"],
+            ac_dim=shape_meta["ac_dim"],
+            device=args_cli.device,
+        )
+
         # TODO: change this to the policy rollout model (this is for debugging)
-        train_policy_iteration(model_to_train, train_loader, val_loader,
+        best_model_path = train_policy_iteration(raw_policy, train_loader, val_loader,
                                 num_epochs=args_cli.train_epochs_per_iter
-                                        )            
+                                        )           
+
+
+        # Load the best model state into the policy
+        if best_model_path is not None and os.path.exists(best_model_path):
+            best_model_state = torch.load(best_model_path)
+            raw_policy.deserialize(best_model_state)
+            print("Loaded best model state based on validation loss")
+            # Clean up temporary file
+            os.remove(best_model_path)
+        else:
+            print("Warning: No best model state found, using current model")
 
         # 3. Save checkpoint (only keep the most recent one)
         if args_cli.save_checkpoints and ckpt_dir:
             # Define current and previous checkpoint paths
-            current_checkpoint_path = os.path.join(ckpt_dir, f"ckpt_epoch.pth")
+            current_checkpoint_path = os.path.join(ckpt_dir, f"ckpt_iter_{iteration}.pth")
             
             # Save using robomimic format
             TrainUtils.save_model(
-                model=model_to_train, # TODO: change this to the policy rollout model (this is for debugging)
+                model=raw_policy, # TODO: change this to the policy rollout model (this is for debugging)
                 config=config,
                 env_meta=env_meta,
                 shape_meta=shape_meta,

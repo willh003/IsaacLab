@@ -69,7 +69,7 @@
         "goal_horizon": null,
         "cuda": true,
         "batch_size": 100,
-        "num_epochs": 300,
+        "num_epochs": 150,
         "seed": 1,
         "max_grad_norm": null
     },

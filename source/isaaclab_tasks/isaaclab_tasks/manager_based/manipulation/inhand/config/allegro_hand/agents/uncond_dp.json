@@ -50,7 +50,7 @@
         "hdf5_validation_filter_key": "test",
         "seq_length": 4, 
         "pad_seq_length": false,
-        "frame_stack": 2,
+        "frame_stack": 1,
         "pad_frame_stack": true,
         "dataset_keys": [
             "actions",
@@ -92,7 +92,7 @@
             }
         },
         "horizon": {
-            "observation_horizon": 2,
+            "observation_horizon": 1,
             "action_horizon": 2,
             "prediction_horizon": 4
         },
@@ -134,7 +134,9 @@
         "modalities": {
             "obs": {
                 "low_dim": [
-                    "robot0_joint_pos"
+                    "robot0_joint_pos",
+                    "object_pos",
+                    "object_quat"
                 ],
                 "rgb": [],
                 "depth": [],

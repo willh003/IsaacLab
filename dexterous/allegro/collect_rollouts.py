@@ -196,6 +196,7 @@ def main():
                         # Start new episode for this environment (regardless of success/failure)
                         current_episodes[i] = EpisodeData()
                         episode_step_counts[i] = 0
+                        
                 
                 #prev_command_counter = command_counter.copy()
                 

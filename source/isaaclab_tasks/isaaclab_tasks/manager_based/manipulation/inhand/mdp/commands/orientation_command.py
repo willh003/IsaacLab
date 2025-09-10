@@ -73,6 +73,11 @@ class InHandReOrientationCommand(CommandTerm):
         self.metrics["position_error"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["consecutive_success"] = torch.zeros(self.num_envs, device=self.device)
 
+
+        self._episode_ended = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+        self._reset_or_success = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
     def __str__(self) -> str:
         msg = "InHandManipulationCommandGenerator:\n"
         msg += f"\tCommand dimension: {tuple(self.command.shape[1:])}\n"
@@ -103,6 +108,9 @@ class InHandReOrientationCommand(CommandTerm):
         successes = self.metrics["orientation_error"] < self.cfg.orientation_success_threshold
         self.metrics["consecutive_success"] += successes.float()
 
+        reset_or_success_ids = successes.nonzero(as_tuple=False).squeeze(-1)
+        self._reset_or_success[reset_or_success_ids] = True
+
     def _resample_command(self, env_ids: Sequence[int]):
         # sample new orientation targets
         rand_floats = 2.0 * torch.rand((len(env_ids), 2), device=self.device) - 1.0
@@ -113,6 +121,38 @@ class InHandReOrientationCommand(CommandTerm):
         )
         # make sure the quaternion real-part is always positive
         self.quat_command_w[env_ids] = math_utils.quat_unique(quat) if self.cfg.make_quat_unique else quat
+
+    @property
+    def episode_ended(self):
+        """Get the episode ended indicator (for collect_rollouts.py)."""
+        return self._episode_ended
+    
+    @property
+    def reset_or_success(self):
+        """Get the reset or success indicator (for collect_rollouts.py)."""
+        return self._reset_or_success
+
+    def clear_reset_indicator(self, env_ids: torch.Tensor):
+        """Clear the reset or success indicator for specified environments.
+        
+        This method is called by collect_rollouts.py after it has detected an episode end
+        to prepare for the next episode detection.
+        
+        Args:
+            env_ids: Environment IDs to clear the reset or success indicator for.
+        """
+        self._reset_or_success[env_ids] = False
+
+    def clear_episode_ended_indicator(self, env_ids: torch.Tensor):
+        """Clear the episode ended indicator for specified environments.
+        
+        This method is called by collect_rollouts.py after it has detected an episode end
+        to prepare for the next episode detection.
+        
+        Args:
+            env_ids: Environment IDs to clear the episode ended indicator for.
+        """
+        self._episode_ended[env_ids] = False
 
     def _update_command(self):
         # update the command if goal is reached

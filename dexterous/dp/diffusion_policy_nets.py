@@ -157,6 +157,7 @@ class ForwardNoiseScheduler(nn.Module):
         self,
         original_samples: torch.FloatTensor,
         timesteps: torch.IntTensor,
+        fixed_noise: torch.FloatTensor = None,
     ) -> torch.FloatTensor:
         if all(timesteps < 0): # negative timesteps mean no noise
             return original_samples
@@ -175,7 +176,12 @@ class ForwardNoiseScheduler(nn.Module):
         while len(sqrt_one_minus_alpha_prod.shape) < len(original_samples.shape):
             sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.unsqueeze(-1)
 
-        noise = torch.randn(original_samples.shape, device=original_samples.device)
+        if fixed_noise is not None:
+            # Use provided fixed noise
+            noise = fixed_noise
+        else:
+            # Generate random noise as before
+            noise = torch.randn(original_samples.shape, device=original_samples.device)
         noisy_samples = sqrt_alpha_prod * original_samples + sqrt_one_minus_alpha_prod * noise
         return noisy_samples
 

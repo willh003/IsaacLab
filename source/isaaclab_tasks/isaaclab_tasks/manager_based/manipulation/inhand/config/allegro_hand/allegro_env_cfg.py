@@ -32,7 +32,13 @@ class AllegroCubeEnvCfg(inhand_env_cfg.InHandObjectEnvCfg):
         # switch robot to allegro hand
         self.scene.robot = ALLEGRO_HAND_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-
+        from isaaclab.managers import EventTermCfg as EventTerm
+        self.events.episode_ended = EventTerm(
+            func=mdp.episode_ended_on_success_count,
+            mode="interval",
+            interval_range_s=(0.0, 0.0),
+            params={"command_name": "object_pose"},
+        )
 
 @configclass
 class AllegroCubeEnvCfg_PLAY(AllegroCubeEnvCfg):
@@ -124,8 +130,7 @@ class AllegroCubeResetEnvCfg(AllegroCubeContactObsEnvCfg):
         
         # Add event term for success count resets
         # This will reset both joint and object positions when success count threshold is reached
-        from isaaclab.managers import EventTermCfg as EventTerm
-        
+
         self.events.reset_robot_and_object_on_success = EventTerm(
             func=mdp.reset_robot_and_object_on_success_count,
             mode="interval",  # Check every step
@@ -204,7 +209,7 @@ class AllegroCubeNoVelObsEnvCfg(AllegroCubeEnvCfg):
 
         # switch observation group to no velocity group
         self.observations.policy = inhand_env_cfg.ObservationsCfg.NoVelocityKinematicObsGroupCfg()
-
+        
 
 @configclass
 class AllegroCubeNoVelObsEnvCfg_PLAY(AllegroCubeNoVelObsEnvCfg):
@@ -217,7 +222,7 @@ class AllegroCubeNoVelObsEnvCfg_PLAY(AllegroCubeNoVelObsEnvCfg):
         self.observations.policy.enable_corruption = False
         # remove termination due to timeouts
         self.terminations.time_out = None
-
+        
 
 ##
 # Environment configuration for trajectory following evaluation.

@@ -59,6 +59,7 @@ def parse_args_early():
     parser.add_argument("--config", type=str, default=None, 
                        help="Override robomimic config entry point (e.g., 'path.to.your.config:your_cfg.json')")
     parser.add_argument("--algo", type=str, default=None, help="Name of the algorithm.")
+    parser.add_argument("--cuda", type=int, default=None, help="CUDA device")
     
     # Parse only the arguments we need, ignore the rest for now
     args, unknown = parser.parse_known_args()
@@ -70,6 +71,9 @@ if early_args.config is not None and early_args.algo is not None:
     env_var_name = f"ROBOMIMIC_{early_args.algo.upper()}_CFG_ENTRY_POINT"
     os.environ[env_var_name] = early_args.config
     print(f"Pre-import override: {env_var_name} = {early_args.config}")
+if early_args.cuda is not None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(early_args.cuda)
+
 
 # Now proceed with all other imports
 from re import S
@@ -353,6 +357,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         valid_loader = None
     
     #test_train_loader()
+    print(f"Train with {len(train_loader) * train_loader.batch_size} sequence samples and batch size {train_loader.batch_size}")
 
     # Monkey-patch wandb.save to avoid uploading large files
     original_save = wandb.save
@@ -509,7 +514,28 @@ def main(args: argparse.Namespace):
         raise ValueError("Please provide a task name through CLI arguments.")
 
     if args.dataset is not None:
-        config.train.data = args.dataset
+        # Create a process-specific copy of the dataset to avoid HDF5 concurrent access issues
+        if args.cuda is not None:
+            original_dataset = args.dataset
+            dataset_path = Path(original_dataset)
+            stem = dataset_path.stem
+            suffix = dataset_path.suffix
+            parent = dataset_path.parent
+            
+            # Create a new filename with CUDA device ID to avoid conflicts
+            new_name = f"{stem}_proc{args.cuda}{suffix}"
+            process_dataset = parent / new_name
+            
+            # Copy the file if it doesn't already exist
+            if not process_dataset.exists():
+                print(f"Creating dataset copy for CUDA device {args.cuda}: {process_dataset}")
+                shutil.copy2(original_dataset, process_dataset)
+            else:
+                print(f"Using existing dataset copy for CUDA device {args.cuda}: {process_dataset}")
+                
+            config.train.data = str(process_dataset)
+        else:
+            config.train.data = args.dataset
     else:
         raise ValueError("Please provide a dataset path through CLI arguments.")
 
@@ -577,6 +603,7 @@ if __name__ == "__main__":
     parser.add_argument("--goal_cond", type=lambda x: x.split(',') if x is not None else None, default=None, help="Goal conditioning")
     parser.add_argument("--config", type=str, default=None, 
                        help="Override robomimic config entry point (e.g., 'path.to.your.config:your_cfg.json')")
+    parser.add_argument("--cuda", type=int, default=None, help="CUDA device")
 
     args = parser.parse_args()
 

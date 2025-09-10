@@ -243,6 +243,41 @@ class NoisedObservationGroupEncoder(ObsNets.ObservationGroupEncoder):
         self.noise_groups = noise_groups
         self.num_train_timesteps = num_train_timesteps
         
+        # For storing fixed noise per environment
+        self.fixed_noise_cache = {}
+        self.use_fixed_noise = False
+        self.batch_size = None
+        
+    def initialize_fixed_noise(self, batch_size, device):
+        """Initialize fixed noise for each environment in the batch"""
+        if not self.use_fixed_noise or self.batch_size != batch_size:
+            # Only clear cache and reinitialize if not already in fixed noise mode or batch size changed
+            self.use_fixed_noise = True
+            self.fixed_noise_cache.clear()
+            self.batch_size = batch_size
+            self.device = device
+
+    def reset_fixed_noise(self):
+        """Reset to using random noise instead of fixed noise"""
+
+        self.use_fixed_noise = False
+        self.fixed_noise_cache.clear()
+        self.batch_size = None
+        
+    def _get_fixed_noise(self, key, shape, device):
+        """Get or generate fixed noise for a specific observation key"""
+        if not self.use_fixed_noise:
+            return None
+        
+        # The shape includes batch dimension, so we need to extract batch_size
+        batch_size = shape[0]
+        
+        if key not in self.fixed_noise_cache:
+            # Generate fixed noise per environment for this observation type
+            # Store noise for all environments at once - this stays constant across steps
+            self.fixed_noise_cache[key] = torch.randn(shape, device=device)
+        
+        return self.fixed_noise_cache[key]
 
     def forward(self, **kwargs):
         """
@@ -342,11 +377,17 @@ class NoisedObservationGroupEncoder(ObsNets.ObservationGroupEncoder):
                             # Handle goal repetition for frame stacking
                             obs_encoding = obs_encoding.reshape(batch_size, seq_len, -1)  # (B*T, D) -> (B, T, D)
                             obs_encoding = obs_encoding[:, 0, ...]  # (B, T, D) -> (B, D) - take first timestep
-                            noised_obs_encoding = self.noise_scheduler(obs_encoding, timesteps)
+                            
+                            # Get fixed noise if using fixed noise mode
+                            fixed_noise = self._get_fixed_noise(key_pair, obs_encoding.shape, obs_encoding.device)
+                            noised_obs_encoding = self.noise_scheduler(obs_encoding, timesteps, fixed_noise=fixed_noise)
+                            
                             noised_obs_encoding = noised_obs_encoding.unsqueeze(1).repeat(1, seq_len, 1)  # (B,D) -> (B,T,D)
                             noised_obs_encoding = TensorUtils.join_dimensions(noised_obs_encoding, 0, 1)  # (B,T,D) -> (B*T,D)
                         else:
-                            noised_obs_encoding = self.noise_scheduler(obs_encoding, timesteps_seq)
+                            # Get fixed noise if using fixed noise mode
+                            fixed_noise = self._get_fixed_noise(key_pair, obs_encoding.shape, obs_encoding.device)
+                            noised_obs_encoding = self.noise_scheduler(obs_encoding, timesteps_seq, fixed_noise=fixed_noise)
                         
                         # Replace the portion of the encoding with the noised version
                         group_noised_enc[:, dim_offset:dim_offset + obs_dim] = noised_obs_encoding
@@ -399,7 +440,8 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
 
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
-                
+
+
         if 'noise_groups' in self.obs_config:
             noise_groups = self.obs_config.noise_groups
             # use same noise scheduler as action denoiser for now
@@ -650,6 +692,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
         self.obs_queue = obs_queue
         self.action_queue = action_queue
         self.goal_queue = goal_queue
+        
+        # Reset fixed noise when starting a new episode
+        #if hasattr(self.nets["policy"]["obs_encoder"], 'reset_fixed_noise'):
+        #    self.nets["policy"]["obs_encoder"].reset_fixed_noise()
     
     def get_action(self, obs_dict, goal_dict=None, noise_group_timesteps=None, mask_observations=False):
         """
@@ -737,6 +783,15 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
             B = inputs["obs"][k].shape[0]
         
+        # Initialize fixed noise if noise_group_timesteps is provided (regardless of values)
+        # if noise_group_timesteps is not None:
+        #     nets["policy"]["obs_encoder"].initialize_fixed_noise(B, self.device)
+        # else:
+        #     nets["policy"]["obs_encoder"].reset_fixed_noise()
+        
+        
+
+        #nets["policy"]["obs_encoder"].reset_fixed_noise()
         # Encode observations with deterministic masking choice during inference
         obs_features = TensorUtils.time_distributed(
             inputs=inputs, 
@@ -748,11 +803,13 @@ class DiffusionPolicyUNet(PolicyAlgo):
             noise_group_timesteps=noise_group_timesteps, 
             inputs_as_kwargs=True
         )
-        
+
+
         assert obs_features.ndim == 3  # [B, T, D]
         B = obs_features.shape[0]
         # reshape observation to (B,obs_horizon*obs_dim)
         obs_cond = obs_features.flatten(start_dim=1)
+
 
         # initialize action from Guassian noise
         noisy_action = torch.randn(

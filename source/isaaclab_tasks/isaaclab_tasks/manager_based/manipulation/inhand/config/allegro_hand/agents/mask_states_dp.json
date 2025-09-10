@@ -41,7 +41,7 @@
         "data": null,
         "output_dir": "../diffusion_policy_trained_models",
         "normalize_weights_by_ds_size": false,
-        "num_data_workers": 8,
+        "num_data_workers": 0,
         "hdf5_cache_mode": "nongoal",
         "hdf5_use_swmr": true,
         "hdf5_load_next_obs": false,
@@ -69,7 +69,7 @@
         "goal_horizon": null,
         "cuda": true,
         "batch_size": 100,
-        "num_epochs": 300,
+        "num_epochs": 150,
         "seed": 1,
         "max_grad_norm": null
     },
