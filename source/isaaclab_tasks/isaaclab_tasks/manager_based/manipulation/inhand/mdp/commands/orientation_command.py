@@ -83,6 +83,16 @@ class InHandReOrientationCommand(CommandTerm):
         msg += f"\tCommand dimension: {tuple(self.command.shape[1:])}\n"
         return msg
 
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        """Reset the command term.
+        
+        Args:
+            env_ids: The environment IDs to reset.
+        """
+        metrics = super().reset(env_ids)
+        assert (self.metrics["consecutive_success"][env_ids] == 0.0).all(), f"Consecutive success should be 0 after reset but got {self.metrics['consecutive_success'][env_ids]}"
+        return metrics
+
     """
     Properties
     """

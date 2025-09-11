@@ -12,7 +12,7 @@ def main():
     parser = argparse.ArgumentParser(description="Analyze final states vs goals in HDF5 file")
     parser.add_argument("--file", type=str, required=True, help="Path to HDF5 file")
     parser.add_argument("--device", type=str, default="cpu", help="Device to load data on")
-    parser.add_argument("--num_episodes", type=int, default=10, help="Number of episodes to analyze (0 for all)")
+    parser.add_argument("--num_episodes", type=int, default=0, help="Number of episodes to analyze (0 for all)")
     args = parser.parse_args()
     
     if not os.path.exists(args.file):

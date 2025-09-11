@@ -7,7 +7,7 @@
 
 """Launch Isaac Sim Simulator first."""
 import argparse
-from utils import get_state_from_env, get_goal_from_env
+from utils import get_state_from_env, get_goal_from_env, get_termination_env_ids
 
 # Import evaluation module
 import sys
@@ -202,7 +202,7 @@ def main():
                 evaluator.update_step_evaluation(obs_dict, goal_dict, rew)
                 
                 # Check for episode completion and update evaluation
-                evaluator.check_episode_completion(env, obs_dict, goal_dict, dones)
+                evaluator.check_episode_completion(env)
                 
                 rewards = np.concatenate([rewards, rew.cpu().numpy()])
 
@@ -226,7 +226,7 @@ def main():
                 pbar.set_description(f"Mean reward: {rew.mean().item():.2f}, max reward: {rew.max().item():.2f}")
 
         # Finalize any in-progress episodes and print evaluation results
-        evaluator.finalize_all_episodes(obs_dict, goal_dict)
+        evaluator.finalize_all_episodes()
         evaluator.print_evaluation_results()
 
         # After the loop, print the mean

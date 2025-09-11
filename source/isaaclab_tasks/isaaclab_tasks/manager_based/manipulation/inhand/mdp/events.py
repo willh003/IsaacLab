@@ -280,14 +280,18 @@ def set_episode_success(
     """Set the episode_ended flag for collect_rollouts.py to detect"""
 
     command_term = env.command_manager.get_term(command_name)
-    if hasattr(command_term, 'reset_or_success'):
-        # Find environments that had a success count reset
-        ended_mask = command_term.reset_or_success[env_ids]
-        success_reset_env_ids = env_ids[ended_mask]
-        if len(success_reset_env_ids) > 0:
-            command_term = env.command_manager.get_term(command_name)
-            if hasattr(command_term, '_episode_ended'):
-                command_term._episode_ended[success_reset_env_ids] = True
 
-    
-        command_term.clear_reset_indicator(success_reset_env_ids)
+    assert hasattr(command_term, 'successes'), "Command term does not have successes attribute"
+
+    # Find environments that had a success count reset
+    ended_mask = command_term.successes[env_ids]
+    success_reset_env_ids = env_ids[ended_mask]
+    if len(success_reset_env_ids) > 0:
+        command_term = env.command_manager.get_term(command_name)
+        if hasattr(command_term, 'mark_episodes_ended'):
+            command_term.mark_episodes_ended(success_reset_env_ids)
+        else:
+            print("Warning: not ending episode on success because command term does not have mark_episodes_ended method")
+
+
+    command_term.clear_reset_indicator(success_reset_env_ids)

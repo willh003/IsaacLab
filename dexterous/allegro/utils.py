@@ -1,6 +1,6 @@
 
 import torch
-
+import numpy as np
 
 # Define the indices for each observation key (start, end)
 OBS_INDICES = {
@@ -16,7 +16,22 @@ OBS_INDICES = {
     "fingertip_contacts": (72, 76),
 }
 
+def get_termination_env_ids(env):
+    """Get the termination reason among "success", "failure", or "time_out"."""
+                    # Check for environment resets due to success count reset mechanism (successful episodes)
+    term_dones = env.unwrapped.termination_manager._term_dones
 
+    # xor of the three should be True
+    assert (term_dones["success"] + term_dones["failure"] <= 1).all(), "Only one of success, failure, or time_out should be True"
+
+    # get the envs that are done
+    done_envs = {
+        "success": np.nonzero(term_dones["success"]),
+        "failure": np.nonzero(term_dones["failure"]),
+        "time_out": np.nonzero(term_dones["time_out"])
+    }
+
+    return done_envs
 
 def get_state_from_env(obs, obs_keys, device = 'cuda'):
     """

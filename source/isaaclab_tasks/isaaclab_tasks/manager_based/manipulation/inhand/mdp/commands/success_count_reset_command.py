@@ -22,6 +22,13 @@ if TYPE_CHECKING:
     from .commands_cfg import SuccessCountResetCommandCfg
 
 
+"""
+Flow:
+1. command term computes the orientation error of the object, marking successful environemnts in command_term.success_occurred
+2. event term runs every step, detecting successful environments
+
+"""
+
 class SuccessCountResetCommand(CommandTerm):
     """Command term that generates 3D pose commands for in-hand manipulation task with success count resets.
 
@@ -77,7 +84,7 @@ class SuccessCountResetCommand(CommandTerm):
         self.metrics["success_count"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["should_reset"] = torch.zeros(self.num_envs, device=self.device)
 
-        self._reset_occurred = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._success_occurred = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self._episode_ended = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
     def __str__(self) -> str:
@@ -102,6 +109,7 @@ class SuccessCountResetCommand(CommandTerm):
     def _update_metrics(self):
         # logs data
         # -- compute the orientation error
+
         self.metrics["orientation_error"] = math_utils.quat_error_magnitude(
             self.object.data.root_quat_w, self.quat_command_w
         )
@@ -115,15 +123,12 @@ class SuccessCountResetCommand(CommandTerm):
         self.metrics["success_count"] += goal_reached.float()
         
         # -- check if we should reset (reached N consecutive successes)
-        self.metrics["should_reset"] = (self.metrics["success_count"] >= self.cfg.successes_before_reset).float()
+        self.metrics["full_episode_success"] = (self.metrics["success_count"] >= self.cfg.successes_before_reset).float()
 
         # Set the persistent reset indicator for collect_rollouts to detect
-        reset_env_ids = self.metrics["should_reset"].nonzero(as_tuple=False).squeeze(-1)
-        self._reset_occurred[reset_env_ids] = True
+        full_episode_success_env_ids = self.metrics["full_episode_success"].nonzero(as_tuple=False).squeeze(-1)
+        self._success_occurred[full_episode_success_env_ids] = True
         
-        # -- compute the number of consecutive successes (for compatibility)
-        self.metrics["consecutive_success"] += goal_reached.float()
-
 
     def _resample_command(self, env_ids: Sequence[int]):
         if self.cfg.use_predefined_reset:
@@ -150,20 +155,23 @@ class SuccessCountResetCommand(CommandTerm):
         
         # Reset the success count for these environments
         self.metrics["success_count"][env_ids] = 0.0
-        self.metrics["should_reset"][env_ids] = 0.0
+        self.metrics["full_episode_success"][env_ids] = 0.0
 
     @property
-    def reset_occurred(self):
-        """Get the reset indicator."""
-        return self._reset_occurred
+    def success_occurred(self):
+        """Get the success indicator."""
+        return self._success_occurred
     
     @property
     def episode_ended(self):
         """Get the episode ended indicator (for collect_rollouts.py)."""
         return self._episode_ended
     
-    def clear_reset_indicator(self, env_ids: torch.Tensor):
-        """Clear the reset indicator for specified environments.
+    def mark_episodes_ended(self, env_ids: torch.Tensor):
+        self._episode_ended[env_ids] = True
+
+    def clear_success_indicator(self, env_ids: torch.Tensor):
+        """Clear the success indicator for specified environments.
         
         This method is called by EventTerms after they have processed the reset
         to prepare for the next reset detection.
@@ -171,7 +179,7 @@ class SuccessCountResetCommand(CommandTerm):
         Args:
             env_ids: Environment IDs to clear the reset indicator for.
         """
-        self._reset_occurred[env_ids] = False 
+        self._success_occurred[env_ids] = False 
         
     def clear_episode_ended_indicator(self, env_ids: torch.Tensor):
         """Clear the episode ended indicator for specified environments.
@@ -185,15 +193,12 @@ class SuccessCountResetCommand(CommandTerm):
         self._episode_ended[env_ids] = False
 
     def _update_command(self):
-        # Check if any environments should reset
-        reset_env_ids = (self.metrics["should_reset"] > 0.5).nonzero(as_tuple=False).squeeze(-1)
+        # Reset envs that weren't successful
+        reset_env_ids = (self.metrics["full_episode_success"] > 0.5).nonzero(as_tuple=False).squeeze(-1)
         
         if len(reset_env_ids) > 0:
             # Resample goals for environments that need to reset
             self._resample_command(reset_env_ids)
-            
-            # The reset_occurred flag is already set in _update_metrics
-            # External code (like collect_rollouts) will detect this and handle the reset
 
     def _set_debug_vis_impl(self, debug_vis: TYPE_CHECKING):
         # set visibility of markers

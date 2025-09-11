@@ -8,6 +8,7 @@ specifically for tasks involving object rotation towards goal poses.
 import torch
 import torch.nn.functional as F
 import numpy as np
+from .utils import get_termination_env_ids
 
 NUM_EVAL_ENVS = 128
 NUM_EVAL_STEPS = 200
@@ -86,37 +87,23 @@ class EpisodeEvaluator:
             
             self.episode_step_counts[env_idx] += 1
     
-    def check_episode_completion(self, env, obs_dict, goal_dict, terminated):
+    def check_episode_completion(self, env):
         """Check for episode completion and handle evaluation."""
-        env_reset = np.zeros(self.num_envs, dtype=bool)
-        command_term = env.unwrapped.command_manager.get_term("object_pose")
-        
+        termination_env_ids = get_termination_env_ids(env)
+        for successful_env_id in termination_env_ids["success"]:
+            if not self.completed_env_mask[successful_env_id]:
+                self._finalize_episode(successful_env_id, is_successful=True, is_failed=False)
+                self.completed_env_mask[successful_env_id] = True  # Mark this environment as completed
+        for failed_env_id in termination_env_ids["failure"]:
+            if not self.completed_env_mask[failed_env_id]:
+                self._finalize_episode(failed_env_id, is_successful=False, is_failed=True)
+                self.completed_env_mask[failed_env_id] = True  # Mark this environment as completed
+        for time_out_env_id in termination_env_ids["time_out"]:
+            if not self.completed_env_mask[time_out_env_id]:
+                self._finalize_episode(time_out_env_id, is_successful=False, is_failed=False)
+                self.completed_env_mask[time_out_env_id] = True  # Mark this environment as completed
 
-        if hasattr(command_term, 'episode_ended'):
-            episode_ended = command_term.episode_ended.cpu().numpy()
-            env_reset = episode_ended
-            if env_reset.any():
-                reset_env_ids = np.where(env_reset)[0]
-                print(f"Episode ended in env {reset_env_ids}")
-                # Clear the episode_ended indicator after detecting it
-                command_term.clear_episode_ended_indicator(torch.tensor(reset_env_ids, device=env.unwrapped.device))
-        
-        # Check for terminations/truncations (failures)
-        env_failed = terminated.cpu().numpy().astype(bool) & ~env_reset
-        
-        # Handle episode endings
-        for env_idx in range(self.num_envs):
-            # Skip environments that have already completed their episode
-            if self.completed_env_mask[env_idx]:
-                continue
-                
-            episode_should_end = (env_reset[env_idx] and self.episode_step_counts[env_idx] > 1) or env_failed[env_idx]
-            
-            if episode_should_end:
-                self._finalize_episode(env_idx, env_reset[env_idx], env_failed[env_idx], obs_dict, goal_dict)
-                self.completed_env_mask[env_idx] = True  # Mark this environment as completed
-    
-    def _finalize_episode(self, env_idx, successful_reset, terminated, obs_dict, goal_dict):
+    def _finalize_episode(self, env_idx, is_successful, is_failed):
         """Finalize evaluation for completed episode."""
         if len(self.current_episode_evaluations[env_idx]) > 0:
             episode_mean_eval = np.mean(self.current_episode_evaluations[env_idx][:-2])
@@ -142,14 +129,14 @@ class EpisodeEvaluator:
                 'distance_improvement': distance_improvement,
                 'total_reward': total_reward,
                 'mean_reward': mean_reward,
-                'successful': successful_reset and self.episode_step_counts[env_idx] > 10,
-                'terminated': terminated
+                'successful': is_successful and self.episode_step_counts[env_idx] > 10,
+                'terminated': is_failed
             }
             
             self.completed_episode_results.append(episode_result)
             
             # Debug info for successful episodes
-            if successful_reset:
+            if is_successful:
                 print(f"[INFO] Episode completed successfully in env {env_idx}: "
                       f"{self.episode_step_counts[env_idx]} steps, "
                       f"improvement: {np.degrees(distance_improvement):.1f}°, "
@@ -161,13 +148,13 @@ class EpisodeEvaluator:
         self.current_episode_rewards[env_idx] = []
         self.episode_step_counts[env_idx] = 0
     
-    def finalize_all_episodes(self, obs_dict, goal_dict):
+    def finalize_all_episodes(self):
         """Finalize all in-progress episodes at the end of simulation."""
         for env_idx in range(self.num_envs):
             # Only finalize environments that haven't completed yet and have evaluation data
             if not self.completed_env_mask[env_idx] and len(self.current_episode_evaluations[env_idx]) > 0:
                 # This episode was in progress but never completed naturally
-                self._finalize_episode(env_idx, successful_reset=False, terminated=False, obs_dict=obs_dict, goal_dict=goal_dict)
+                self._finalize_episode(env_idx, is_successful=False, is_failed=False)
                 self.completed_env_mask[env_idx] = True  # Mark as completed
     
     def print_evaluation_results(self):

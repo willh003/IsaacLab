@@ -25,6 +25,7 @@ import sys
 import gymnasium as gym
 import gc
 import collections
+import matplotlib.pyplot as plt
 
 
 import signal
@@ -38,6 +39,97 @@ def cleanup():
 signal.signal(signal.SIGINT, lambda s, f: (cleanup(), exit(0)))
 signal.signal(signal.SIGTERM, lambda s, f: (cleanup(), exit(0)))
 atexit.register(cleanup)
+
+
+def quaternion_to_euler(q):
+    """Convert quaternion (w, x, y, z) to Euler angles (roll, pitch, yaw)."""
+    w, x, y, z = q
+    
+    # Roll (x-axis rotation)
+    sinr_cosp = 2 * (w * x + y * z)
+    cosr_cosp = 1 - 2 * (x * x + y * y)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+    
+    # Pitch (y-axis rotation)
+    sinp = 2 * (w * y - z * x)
+    if abs(sinp) >= 1:
+        pitch = np.copysign(np.pi / 2, sinp)
+    else:
+        pitch = np.arcsin(sinp)
+    
+    # Yaw (z-axis rotation)
+    siny_cosp = 2 * (w * z + x * y)
+    cosy_cosp = 1 - 2 * (y * y + z * z)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+    
+    return roll, pitch, yaw
+
+
+def visualize_final_euler_distribution(buffer, output_dir, iteration):
+    """Generate final euler angle distribution plot from buffer data."""
+    if buffer.len(is_val=False) == 0:
+        print("No data in buffer for visualization")
+        return
+    
+    # Extract object quaternions from all trajectories in buffer
+    final_quats = []
+    
+    # Get all trajectories from buffer
+    for traj_idx in range(buffer.len(is_val=False)):
+        traj_data = buffer.get_trajectory(traj_idx, is_val=False)
+        
+        if len(traj_data['obs']) > 0:
+            # Get final observation from trajectory
+            final_obs = traj_data['obs'][-1]
+            
+            # Extract object quaternion (indices 35:39 based on analyze_episode_goals.py)
+            if 'obs' in final_obs:
+                obs_tensor = final_obs['obs']
+                if len(obs_tensor) >= 39:
+                    final_quat = obs_tensor[35:39].cpu().numpy()
+                    final_quats.append(final_quat)
+    
+    if len(final_quats) == 0:
+        print("No valid quaternion data found in buffer")
+        return
+    
+    final_quats = np.array(final_quats)
+    final_euler = np.array([quaternion_to_euler(q) for q in final_quats])
+    
+    # Create distribution plot
+    plt.rcParams['figure.facecolor'] = 'white'
+    plt.rcParams['axes.grid'] = True
+    
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig.suptitle(f'Final Object Euler Angles Distribution - Iteration {iteration}', fontsize=16)
+    
+    euler_labels = ['Roll', 'Pitch', 'Yaw']
+    for comp_idx, label in enumerate(euler_labels):
+        ax = axes[comp_idx]
+        ax.hist(np.degrees(final_euler[:, comp_idx]), bins=20, alpha=0.7, edgecolor='black')
+        ax.set_xlabel(f'Final {label} (degrees)')
+        ax.set_ylabel('Frequency')
+        ax.set_title(f'Distribution of Final {label}')
+        ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    os.makedirs(output_dir, exist_ok=True)
+    plot_path = os.path.join(output_dir, f'final_euler_distribution_iter_{iteration}.png')
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Saved final Euler distribution plot: {plot_path}")
+    
+    # Print statistics
+    print(f"Final Euler Angle Statistics (degrees) - {len(final_quats)} trajectories:")
+    for i, label in enumerate(euler_labels):
+        values = np.degrees(final_euler[:, i])
+        print(f"  {label}: mean={np.mean(values):.1f}, std={np.std(values):.1f}, "
+              f"min={np.min(values):.1f}, max={np.max(values):.1f}")
+    
+    return plot_path
 
 
 def parse_args_early():
@@ -123,7 +215,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from allegro.utils import get_state_from_env as get_state_from_env_allegro
 from allegro.utils import get_goal_from_env as get_goal_from_env_allegro
 from leap.utils import get_state_from_env as get_state_from_env_leap
-
+from dp.utils import get_termination_env_ids
 import wandb
 
 def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min_length=1, max_steps=200, is_dp=False, mask_observations=False):
@@ -142,6 +234,7 @@ def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min
     episode_rewards = []
     episode_lengths = []
     success_count = 0
+    time_out_count = 0
     failed_count = 0
     action_norm_params = buffer.get_action_normalization_params()
     
@@ -154,12 +247,15 @@ def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min
             episode_data = _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_params, mask_observations)
 
             total_count = 0
-            for i, (obs_traj, action_traj, reward, length, success, failed) in enumerate(episode_data):
-                if failed:
-                    failed_count += 1
+            for i, (obs_traj, action_traj, reward, length, success, failed, time_out) in enumerate(episode_data):
                 if success:  # Success
                     success_count += 1
-                if not failed and len(obs_traj) > min_length:
+                if failed:
+                    failed_count += 1
+                if time_out:
+                    time_out_count += 1
+            
+                if (success or time_out) and len(obs_traj) > min_length:
                     # Save individual trajectory for this environment to buffer
                     buffer.add_trajectory(obs_traj, action_traj)
                     
@@ -167,7 +263,6 @@ def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min
                     trajectories.append(length)
                     episode_rewards.append(reward)
                     episode_lengths.append(length)
-                    
 
                     total_count +=1
                     
@@ -191,6 +286,7 @@ def collect_trajectories_and_evaluate(env, policy, buffer, num_trajectories, min
         'mean_length': np.mean(episode_lengths),
         'success_rate': success_count / len(trajectories),
         'failed_rate': failed_count / len(trajectories),
+        'time_out_rate': time_out_count / len(trajectories),
         'all_rewards': episode_rewards,
         'start_memory': start_memory,
         'end_memory': end_memory
@@ -209,6 +305,7 @@ def _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_param
     episode_lengths = [0 for _ in range(num_envs)]
     success = [False for _ in range(num_envs)]
     failed = [False for _ in range(num_envs)]
+    time_out = [False for _ in range(num_envs)]
     
     for step in tqdm(range(max_steps)):
         # Get action from policy for all environments (needed for environment stepping)
@@ -230,22 +327,24 @@ def _run_episode(env, policy, obs, num_envs, max_steps, is_dp, action_norm_param
         # Step environment
         obs, reward, terminated, truncated, info = env.step(action)
         
-        # Update episode state for each environment
-        for i in range(num_envs):
-            if not (success[i] or failed[i]):
-                episode_rewards[i] += reward[i].item()
-                episode_lengths[i] += 1
-                
-                # Check completion conditions  
-                success[i] = _check_env_reset(env, i)
-                # Match evaluation.py logic: failed only if terminated but NOT successful
-                failed[i] = terminated[i].item() and not success[i]
+        termination_env_ids = get_termination_env_ids(env)
+
+        for successful_env_id in termination_env_ids["success"]:
+            print(f"[INFO] Environment {successful_env_id.item()} succeeded with {episode_step_counts[successful_env_id]} steps")
+            success[successful_env_id] = True
+
+        for failed_env_id in termination_env_ids["failure"]:
+            print(f"[INFO] Environment {failed_env_id.item()} failed with {episode_step_counts[time_out_env_id]} steps")
+            failed[failed_env_id] = True
         
-    
+        for time_out_env_id in termination_env_ids["time_out"]:
+            print(f"[INFO] Environment {time_out_env_id.item()} timed out with {episode_step_counts[time_out_env_id]} steps")
+            time_out[time_out_env_id] = True
+        
     # Return episode data: (obs_traj, action_traj, reward, length, success, failed)
-    ep_data = [(obs_trajs[i], action_trajs[i], episode_rewards[i], episode_lengths[i], success[i], failed[i]) 
+    ep_data = [(obs_trajs[i], action_trajs[i], episode_rewards[i], episode_lengths[i], success[i], failed[i], time_out[i]) 
             for i in range(num_envs)]
-    print(f"Success: {sum(success)}, Failed: {sum(failed)}")
+    print(f"Success: {sum(success)}, Failed: {sum(failed)}, Time out: {sum(time_out)}, Sum: {sum(success) + sum(failed) + sum(time_out)}, Total: {num_envs}")
     
     return ep_data
 
@@ -614,6 +713,11 @@ def gcsl_main():
         # After first iteration, freeze validation set to only use initial policy data
         if iteration == 0:
             buffer.end_initial_policy_phase()
+        
+        # Generate final euler distribution visualization
+        print("Generating final euler distribution visualization...")
+        plots_dir = os.path.join(log_dir, "..", "plots")
+        visualize_final_euler_distribution(buffer, plots_dir, iteration + 1)
         
         # 2. Train policy on buffer data
         # Ensure policy is in training mode before training

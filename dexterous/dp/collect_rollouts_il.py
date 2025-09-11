@@ -58,7 +58,6 @@ from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Collect (state, action) rollouts from a trained diffusion policy.")
-parser.add_argument("--num_steps", type=int, default=None, help="Number of steps to collect.")
 parser.add_argument("--num_rollouts", type=int, default=1000, help="Number of episodes to collect (overrides num_steps).")
 parser.add_argument("--train_split", type=float, default=.8, help="Percent of steps to use for training.")
 parser.add_argument("--output", type=str, default="rollouts.hdf5", help="Output HDF5 file for the dataset.")
@@ -126,6 +125,7 @@ from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from allegro.utils import get_state_from_env as get_state_from_env_allegro
 from allegro.utils import get_goal_from_env as get_goal_from_env_allegro
+from dp.utils import get_termination_env_ids
 from leap.utils import get_state_from_env as get_state_from_env_leap
 
 
@@ -147,7 +147,7 @@ def _get_obs_keys(policy):
     return obs_keys, goal_keys
 
 
-def _prepare_policy_input(obs, policy, env):
+def _prepare_policy_input(obs, policy):
 
     obs_keys, goal_keys = _get_obs_keys(policy)
     obs_dict = get_state_from_env_allegro(obs, obs_keys, device=args_cli.device)
@@ -193,19 +193,6 @@ def _extract_env_data(data, env_idx, num_envs):
     else:
         # Non-tensor data (e.g., scalars, lists)
         return data
-
-
-def _check_env_reset(env, env_idx):
-    """Check if a specific environment has reset (completed successfully)."""
-    if "allegro" in env.spec.id.lower():
-        command_term = env.unwrapped.command_manager.get_term("object_pose")
-        if hasattr(command_term, 'episode_ended'):
-            episode_ended = command_term.episode_ended.cpu().numpy()
-            if episode_ended[env_idx]:
-                # Clear the episode_ended indicator
-                command_term.clear_episode_ended_indicator(torch.tensor([env_idx], device=env.unwrapped.device))
-                return True
-    return False
 
 
 # Validate goal pose consistency in saved episodes
@@ -294,7 +281,6 @@ def main():
     num_steps = args_cli.num_steps
     num_rollouts = args_cli.num_rollouts
     dt = env.unwrapped.step_dt
-    step_count = 0
 
     # Track episodes for each environment
     all_episodes = []  # List to store all completed episodes
@@ -310,24 +296,17 @@ def main():
     obs, _ = env.get_observations()
 
     # Determine termination condition
-    use_rollout_mode = num_rollouts is not None
-    if use_rollout_mode:
-        print(f"[INFO] Collecting {num_rollouts} episodes with {num_envs} envs...")
-        print(f"[INFO] Episodes will terminate when environments reset after N consecutive successes.")
-        pbar_total = num_rollouts
-        pbar_desc = "Collecting episodes"
-    else:
-        print(f"[INFO] Collecting {num_steps} steps of (state, action) data with {num_envs} envs...")
-        print(f"[INFO] Episodes will terminate when environments reset after N consecutive successes.")
-        pbar_total = num_steps
-        pbar_desc = "Collecting rollouts"
+    print(f"[INFO] Collecting {num_rollouts} episodes with {num_envs} envs...")
+    print(f"[INFO] Episodes will terminate when environments reset after N consecutive successes.")
+    pbar_total = num_rollouts
+    pbar_desc = "Collecting episodes"
     
     with tqdm(total=pbar_total, desc=pbar_desc) as pbar:
         while simulation_app.is_running():
             start_time = time.time()
             with torch.inference_mode():
                 #actions = policy(obs)
-                obs_dict, goal_dict = _prepare_policy_input(obs, policy_wrapper, env)
+                obs_dict, goal_dict = _prepare_policy_input(obs, policy_wrapper)
                 actions = _get_policy_action(policy_wrapper, obs_dict, goal_dict, action_norm_params, args_cli.mask_observations)
                 
                 # Add each env's data to its current episode
@@ -340,49 +319,31 @@ def main():
                     
                 obs, _, _, _ = env.step(actions)
                 
-                # Check for environment resets due to success count reset mechanism
-                env_reset = np.zeros(num_envs, dtype=bool)
-                command_term = env.unwrapped.command_manager.get_term("object_pose")
-                if hasattr(command_term, 'episode_ended'):
-                    episode_ended = command_term.episode_ended.cpu().numpy()
-                    env_reset = episode_ended
-                    if env_reset.any():
-                        reset_env_ids = np.where(env_reset)[0]
-                        # Clear the episode_ended indicator after detecting it
-                        command_term.clear_episode_ended_indicator(torch.tensor(reset_env_ids, device=env.unwrapped.device))
-                else:
-                    print("[WARNING] Environment does not have 'episode_ended' attribute. Success count reset detection disabled.")
-                
-                # For environments where environment was reset, finalize current episode and start new one
-                episodes_completed_this_step = 0
-                for i in range(num_envs):
-                    episode_should_end = env_reset[i] and episode_step_counts[i] > 10
-                    
-                    if episode_should_end:
-                        # Finalize current episode if it has data
-                        if episode_step_counts[i] > 0:
-                            all_episodes.append(current_episodes[i])
-                            episodes_completed_this_step += 1
-                            print(f"[INFO] Completed episode for env {i} with {episode_step_counts[i]} steps (env reset)")
-                            episodes_completed_by_reset += 1
-                        
-                        # Start new episode for this environment
-                        current_episodes[i] = EpisodeData()
-                        episode_step_counts[i] = 0
-                
-                #prev_command_counter = command_counter.copy()
-                
-            step_count += num_envs
+                termination_env_ids = get_termination_env_ids(env)
 
-            # Update progress bar based on mode
-            if use_rollout_mode:
-                pbar.update(episodes_completed_this_step)
-                if len(all_episodes) >= num_rollouts:
-                    break
-            else:
-                pbar.update(num_envs)
-                if step_count >= num_steps:
-                    break
+                for successful_env_id in termination_env_ids["success"]:
+                    print(f"[INFO] Environment {successful_env_id.item()} succeeded with {episode_step_counts[successful_env_id]} steps")
+                    all_episodes.append(current_episodes[successful_env_id])
+                    current_episodes[successful_env_id] = EpisodeData()
+                    episode_step_counts[successful_env_id] = 0
+                    successful_episodes += 1
+                    pbar.update(1)
+
+                for failed_env_id in termination_env_ids["failure"]:
+                    print(f"[INFO] Environment {failed_env_id.item()} failed with {episode_step_counts[time_out_env_id]} steps")
+                    current_episodes[failed_env_id] = EpisodeData()
+                    episode_step_counts[failed_env_id] = 0
+                    failed_episodes += 1
+                
+                for time_out_env_id in termination_env_ids["time_out"]:
+                    print(f"[INFO] Environment {time_out_env_id.item()} timed out with {episode_step_counts[time_out_env_id]} steps")
+                    current_episodes[time_out_env_id] = EpisodeData()
+                    episode_step_counts[time_out_env_id] = 0
+                    time_out_episodes += 1
+                
+            
+            if len(all_episodes) >= num_rollouts:
+                break
 
             # time delay for real-time evaluation
             sleep_time = dt - (time.time() - start_time)
@@ -392,14 +353,7 @@ def main():
     
     # Validate all episodes before writing
     print(f"[INFO] Validating goal pose consistency across {len(all_episodes)} episodes...")
-    valid_episodes = []
-    invalid_episodes = 0
-    
-    for i, ep in enumerate(all_episodes):
-        #assert check_goal_pose_consistency(ep), "Failure: goals are not consistent across trajectory"
-        valid_episodes.append(ep)
-    
-    print(f"[INFO] All {len(valid_episodes)} episodes passed goal pose consistency check")
+    valid_episodes = all_episodes
     
     # Write all validated episodes as separate demos (robomimic-compatible)
     for ep in valid_episodes:
@@ -420,9 +374,7 @@ def main():
     handler.flush()
     handler.close()
 
-
-    print(f"[INFO] Done. Saved {len(valid_episodes)} episodes with {step_count} total steps (average {step_count/len(valid_episodes) if len(valid_episodes) > 0 else 0:.1f} steps per episode) to {args_cli.output}.")
-    print(f"[INFO] Episode completion breakdown: {episodes_completed_by_reset} episodes completed successfully, {episodes_discarded_by_failure} failed episodes discarded, {invalid_episodes} episodes discarded due to goal inconsistency")
+    print(f"[INFO] Episode completion breakdown: {successful_episodes} episodes completed successfully, {failed_episodes} failed episodes discarded, {time_out_episodes} episodes discarded due to time out")
     env.close()
 
 

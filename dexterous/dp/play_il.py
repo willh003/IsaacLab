@@ -279,8 +279,6 @@ def main():
                 min_val, max_val = action_norm_params
                 actions = unnormalize_actions(actions, min_val, max_val, device=args_cli.device)
 
-                
-
         obs, rew, terminated, truncated, extras = env.step(actions)
 
         if terminated.any() or truncated.any():
@@ -305,7 +303,7 @@ def main():
     # ny in-progress episodes and print evaluation results
     if evaluator:
 
-        evaluator.finalize_all_episodes(obs_dict, goal_dict)
+        evaluator.finalize_all_episodes()
         evaluator.print_evaluation_results()
 
     env.close()

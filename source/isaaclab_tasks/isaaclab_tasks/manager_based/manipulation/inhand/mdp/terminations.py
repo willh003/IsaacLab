@@ -81,3 +81,19 @@ def object_away_from_robot(
     dist = torch.norm(robot.data.root_pos_w - object.data.root_pos_w, dim=1)
 
     return dist > threshold
+
+
+def consecutive_success(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    num_required_successes: int,
+) -> torch.Tensor:
+    """Check if the object orientation is successful."""
+    command_term: InHandReOrientationCommand = env.command_manager.get_term(command_name)
+
+    return command_term.metrics["consecutive_success"] >= num_required_successes
+
+
+def step_timeout(env: ManagerBasedRLEnv, max_steps: int) -> torch.Tensor:
+    """Check if the step timeout has been reached."""
+    return env.episode_length_buf >= max_steps

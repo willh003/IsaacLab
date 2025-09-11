@@ -20,7 +20,8 @@ import numpy as np
 from isaaclab_assets import ALLEGRO_HAND_CFG  # isort: skip
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import CurriculumTermCfg as CurrTerm
-
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import TerminationTermCfg as DoneTerm
 
 
 @configclass
@@ -28,10 +29,26 @@ class AllegroCubeEnvCfg(inhand_env_cfg.InHandObjectEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
+        self.commands.object_pose = mdp.InHandReOrientationCommandCfg(
+            asset_name="object",
+            init_pos_offset=(0.0, 0.0, -0.04),
+            update_goal_on_success=True,
+            orientation_success_threshold=0.1,
+            make_quat_unique=False,
+            marker_pos_offset=(-0.2, -0.06, 0.08),
+            debug_vis=True,
+        )
+
 
         # switch robot to allegro hand
         self.scene.robot = ALLEGRO_HAND_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
+
+@configclass
+class AllegroCubeEnvCfgReset(AllegroCubeEnvCfg):
+    def __post_init__(self):
+        # post init of parent
+        super().__post_init__()
         # # from isaaclab.managers import EventTermCfg as EventTerm
         # self.events.set_episode_success = EventTerm(
         #     func=mdp.set_episode_success,
@@ -40,24 +57,6 @@ class AllegroCubeEnvCfg(inhand_env_cfg.InHandObjectEnvCfg):
         #     params={"command_name": "object_pose"},
         # )
 
-        # self.events.set_episode_failed = EventTerm(
-        #     func=mdp.set_episode_success,
-        #     mode="interval",
-        #     interval_range_s=(0.0, 0.0),
-        #     params={"command_name": "object_pose"},
-        # )
-
-@configclass
-class AllegroCubeEnvCfg_PLAY(AllegroCubeEnvCfg):
-    def __post_init__(self):
-        # post init of parent
-        super().__post_init__()
-        # make a smaller scene for play
-        self.scene.num_envs = 50
-        # disable randomization for play
-        self.observations.policy.enable_corruption = False
-        # remove termination due to timeouts
-        self.terminations.time_out = None
 
 
 ##
@@ -109,127 +108,57 @@ class AllegroCubeContactObsEnvCfg(AllegroCubeEnvCfg):
         )
 
 
-##
-# Environment configuration that stays at goal for N timesteps before resetting.
-##
 @configclass
-class AllegroCubeResetEnvCfg(AllegroCubeContactObsEnvCfg):
-    def __post_init__(self):
-        # post init of parent
-        super().__post_init__()
-
-        # Replace the command with the success count reset version
-        # This will track consecutive successes and reset after N successes
-        self.commands.object_pose = mdp.SuccessCountResetCommandCfg(
-            asset_name="object",
-            init_pos_offset=(0.0, 0.0, -0.04),
-            orientation_success_threshold=0.1,
-            make_quat_unique=False,
-            marker_pos_offset=(-0.2, -0.06, 0.08),
-            debug_vis=True,
-            successes_before_reset=40,  # Reset after 10 consecutive successes
-            # Option 1: Random orientation resets (default behavior)
-            #use_predefined_reset=False,
-            # Option 2: Predefined orientation resets
-            use_predefined_reset=True,
-            reset_orientation=(torch.pi/4, torch.pi/4, torch.pi/4),  # 90° rotation around Z-axis (π/2 radians)
-        )
-        
-        # Add event term for success count resets
-        # This will reset both joint and object positions when success count threshold is reached
-
-        self.events.reset_robot_and_object_on_success = EventTerm(
-            func=mdp.reset_robot_and_object_on_success_count,
-            mode="interval",  # Check every step
-            interval_range_s=(0.0, 0.0),  # Check every step
-            params={
-                "command_name": "object_pose",
-                # Robot reset parameters
-                "position_range": {".*": [0.2, 0.2]},  # Same as regular reset
-                "velocity_range": {".*": [0.0, 0.0]},
-                "use_default_offset": True,
-                "operation": "scale",
-                # Object reset parameters
-                "pose_range": {"x": [-0.01, 0.01], "y": [-0.01, 0.01], "z": [-0.01, 0.01]},  # Same as regular reset
-                "object_velocity_range": {},
-            },
-        )
-
-@configclass
-class AllegroCubeMultiResetEnvCfg(AllegroCubeEnvCfg):
+class AllegroCubeMultiResetEnvCfg(AllegroCubeEnvCfgReset):
     #class AllegroCubeMultiResetEnvCfg(AllegroCubeContactObsEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
 
-        delattr(self.terminations, "max_consecutive_success")
+        # # Replace the command with the success count reset version
+        # # This will track consecutive successes and reset after N successes
+        # self.commands.object_pose = mdp.SuccessCountResetCommandCfg(
+        #     asset_name="object",
+        #     init_pos_offset=(0.0, 0.0, -0.04),
+        #     orientation_success_threshold=0.1,
+        #     make_quat_unique=False,
+        #     marker_pos_offset=(-0.2, -0.06, 0.08),
+        #     debug_vis=True,
+        #     successes_before_reset=1, 
+        #     # Option 1: Random orientation resets (default behavior)
+        #     #use_predefined_reset=False,
+        #     # Option 2: Predefined orientation resets
+        #     # use_predefined_reset=True,
+        #     # reset_orientation=(torch.pi/4, torch.pi/4, torch.pi/4),  # 90° rotation around Z-axis (π/2 radians)
+        # )
 
-        # Replace the command with the success count reset version
-        # This will track consecutive successes and reset after N successes
-        self.commands.object_pose = mdp.SuccessCountResetCommandCfg(
+        orientation_success_threshold = 0.1
+        num_required_successes = 1
+        max_steps = 200
+        
+        self.commands.object_pose = mdp.InHandReOrientationCommandCfg(
             asset_name="object",
             init_pos_offset=(0.0, 0.0, -0.04),
-            orientation_success_threshold=0.1,
+            update_goal_on_success=False, # IMPORTANT: doesn't update the goal on success, so it can stay there for longer
+            orientation_success_threshold=orientation_success_threshold,
             make_quat_unique=False,
             marker_pos_offset=(-0.2, -0.06, 0.08),
             debug_vis=True,
-            successes_before_reset=1, 
-            # Option 1: Random orientation resets (default behavior)
-            #use_predefined_reset=False,
-            # Option 2: Predefined orientation resets
-            # use_predefined_reset=True,
-            # reset_orientation=(torch.pi/4, torch.pi/4, torch.pi/4),  # 90° rotation around Z-axis (π/2 radians)
-        )
-        
-        # Add event term for success count resets
-        # This will reset both joint and object positions when success count threshold is reached
-        from isaaclab.managers import EventTermCfg as EventTerm
-        
-        self.events.reset_robot_and_object_on_success = EventTerm(
-            func=mdp.reset_robot_and_object_on_success_count,
-            mode="interval",  # Check every step
-            interval_range_s=(0.0, 0.0),  # Check every step
-            params={
-                "command_name": "object_pose",
-                # Robot reset parameters
-                "position_range": {".*": [0.2, 0.2]},  # Same as regular reset
-                "velocity_range": {".*": [0.0, 0.0]},
-                "use_default_offset": True,
-                "operation": "scale",
-                # Object reset parameters
-                "pose_range": {"x": [-0.01, 0.01], "y": [-0.01, 0.01], "z": [-0.01, 0.01]},  # Same as regular reset
-                "object_velocity_range": {},
-            },
         )
 
 
-##
-# Environment configuration with no velocity observations.
-##
+        # replace the terminations in the env with ones compatible with the collection script
+        delattr(self.terminations, "max_consecutive_success")
+        delattr(self.terminations, "object_out_of_reach")
+        delattr(self.terminations, "time_out")
 
+        self.terminations.success = DoneTerm(
+            func=mdp.consecutive_success,
+            params={"command_name": "object_pose", "num_required_successes": num_required_successes},
+        )
+        self.terminations.failure = DoneTerm(func=mdp.object_away_from_robot, params={"threshold": 0.3})
+        self.terminations.time_out = DoneTerm(func=mdp.step_timeout, params={"max_steps": max_steps})
 
-@configclass
-class AllegroCubeNoVelObsEnvCfg(AllegroCubeEnvCfg):
-    def __post_init__(self):
-        # post init of parent
-        super().__post_init__()
-
-        # switch observation group to no velocity group
-        self.observations.policy = inhand_env_cfg.ObservationsCfg.NoVelocityKinematicObsGroupCfg()
-        
-
-@configclass
-class AllegroCubeNoVelObsEnvCfg_PLAY(AllegroCubeNoVelObsEnvCfg):
-    def __post_init__(self):
-        # post init of parent
-        super().__post_init__()
-        # make a smaller scene for play
-        self.scene.num_envs = 50
-        # disable randomization for play
-        self.observations.policy.enable_corruption = False
-        # remove termination due to timeouts
-        self.terminations.time_out = None
-        
 
 ##
 # Environment configuration for trajectory following evaluation.
@@ -237,7 +166,7 @@ class AllegroCubeNoVelObsEnvCfg_PLAY(AllegroCubeNoVelObsEnvCfg):
 
 
 @configclass
-class AllegroCubeTrajectoryEnvCfg(AllegroCubeEnvCfg):
+class AllegroCubeTrajectoryEnvCfg(AllegroCubeEnvCfgReset):
     """Environment configuration for evaluating trajectory following capabilities.
     
     This configuration creates a trajectory-like sequence of goals by making small
@@ -306,7 +235,7 @@ class AllegroCubeTrajectoryEnvCfg(AllegroCubeEnvCfg):
 
 
 @configclass
-class AllegroCubeContinuousEnvCfg(AllegroCubeEnvCfg):
+class AllegroCubeContinuousEnvCfg(AllegroCubeEnvCfgReset):
     """Environment configuration for continuous subgoal learning without environment resets.
     
     This configuration creates an environment that:

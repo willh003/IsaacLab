@@ -16,6 +16,7 @@ import robomimic
 import torch
 import ast
 import argparse
+import numpy as np
 
 from robomimic.utils import obs_utils as ObsUtils
 from robomimic.utils import torch_utils as TorchUtils
@@ -44,6 +45,22 @@ def filter_config_dict(cfg, base_cfg):
             filtered[k] = v
     return filtered
 
+def get_termination_env_ids(env):
+    """Get the termination reason among "success", "failure", or "time_out"."""
+                    # Check for environment resets due to success count reset mechanism (successful episodes)
+    term_dones = env.unwrapped.termination_manager._term_dones
+
+    # xor of the three should be True
+    assert (term_dones["success"] + term_dones["failure"] <= 1).all(), "Only one of success, failure, or time_out should be True"
+
+    # get the envs that are done
+    done_envs = {
+        "success": np.nonzero(term_dones["success"]),
+        "failure": np.nonzero(term_dones["failure"]),
+        "time_out": np.nonzero(term_dones["time_out"])
+    }
+
+    return done_envs
 
 def dict_to_namespace(config_dict):
     for key, value in config_dict.items():
