@@ -35,3 +35,7 @@ def ddpg_update(policy, replay_buffer):
 
     critic_target = ema(critic, critic_target, rho)
     actor_target = ema(actor, actor_target, rho)
+
+
+
+def sac_update(policy, replay_buffer):

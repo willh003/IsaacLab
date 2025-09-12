@@ -287,7 +287,7 @@ def main():
         # Update evaluation tracking and check for episode completion
         if evaluator and "allegro" in args_cli.task.lower():
             evaluator.update_step_evaluation(obs_dict, goal_dict, rew)
-            evaluator.check_episode_completion(env, obs_dict, goal_dict, terminated)
+            evaluator.check_episode_completion(env)
 
         n_steps += 1
         pbar.update(1)

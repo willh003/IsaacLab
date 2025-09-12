@@ -20,13 +20,15 @@ import os
 from utils import OBS_INDICES
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Collect (state, action) rollouts from a trained RL policy.")
-parser.add_argument("--num_rollouts", type=int, default=None, help="Number of episodes to collect (overrides num_steps).")
+parser.add_argument("--num_rollouts", type=int, default=1000, help="Number of episodes to collect (overrides num_steps).")
 parser.add_argument("--train_split", type=float, default=.8, help="Percent of steps to use for training.")
 parser.add_argument("--output", type=str, default="rollouts.hdf5", help="Output HDF5 file for the dataset.")
 parser.add_argument("--num_envs", type=int, default=128, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--use_pretrained_checkpoint", action="store_true", help="Use the pre-trained checkpoint from Nucleus.")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument("--min_length", type=int, default=10, help="Minimum length of episode to be considered valid.")
+
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -121,6 +123,7 @@ def main():
     episode_step_counts = [0 for _ in range(num_envs)]  # Track steps in current episode
 
     successful_episodes = 0
+    too_short_episodes = 0
     failed_episodes = 0
     time_out_episodes = 0
     
@@ -153,14 +156,18 @@ def main():
 
                 for successful_env_id in termination_env_ids["success"]:
                     print(f"[INFO] Environment {successful_env_id.item()} succeeded with {episode_step_counts[successful_env_id]} steps")
-                    all_episodes.append(current_episodes[successful_env_id])
-                    current_episodes[successful_env_id] = EpisodeData()
-                    episode_step_counts[successful_env_id] = 0
-                    successful_episodes += 1
-                    pbar.update(1)
+
+                    if episode_step_counts[successful_env_id] >= args_cli.min_length:
+                        all_episodes.append(current_episodes[successful_env_id])
+                        current_episodes[successful_env_id] = EpisodeData()
+                        episode_step_counts[successful_env_id] = 0
+                        successful_episodes += 1
+                        pbar.update(1)
+                    else:
+                        too_short_episodes += 1
 
                 for failed_env_id in termination_env_ids["failure"]:
-                    print(f"[INFO] Environment {failed_env_id.item()} failed with {episode_step_counts[time_out_env_id]} steps")
+                    print(f"[INFO] Environment {failed_env_id.item()} failed with {episode_step_counts[failed_env_id]} steps")
                     current_episodes[failed_env_id] = EpisodeData()
                     episode_step_counts[failed_env_id] = 0
                     failed_episodes += 1
@@ -199,6 +206,7 @@ def main():
     handler.add_mask_field("train", train_demo_keys)
     handler.add_mask_field("test", test_demo_keys)
 
+
     if num_episodes > 0:
         assert len(train_demo_keys) > 0 and len(test_demo_keys) > 0, "No episodes were added to the train or test split"
     
@@ -206,7 +214,7 @@ def main():
     handler.close()
 
 
-    print(f"[INFO] Episode completion breakdown: {successful_episodes} episodes completed successfully, {failed_episodes} failed episodes discarded, {time_out_episodes} episodes discarded due to time out")
+    print(f"[INFO] Episode completion breakdown: {successful_episodes} episodes completed successfully, {failed_episodes} failed episodes discarded, {time_out_episodes} episodes discarded due to time out, {too_short_episodes} episodes discarded due to being too short")
     print(f"[INFO] Saved to: {args_cli.output}")
     env.close()
 

@@ -159,7 +159,15 @@ class AllegroCubeMultiResetEnvCfg(AllegroCubeEnvCfgReset):
         self.terminations.failure = DoneTerm(func=mdp.object_away_from_robot, params={"threshold": 0.3})
         self.terminations.time_out = DoneTerm(func=mdp.step_timeout, params={"max_steps": max_steps})
 
-
+@configclass
+class AllegroCubeMultiResetEnvStay20(AllegroCubeMultiResetEnvCfg):
+    def __post_init__(self):
+        super().__post_init__()
+        num_required_successes = 20
+        self.terminations.success = DoneTerm(
+            func=mdp.consecutive_success,
+            params={"command_name": "object_pose", "num_required_successes": num_required_successes},
+        )
 ##
 # Environment configuration for trajectory following evaluation.
 ##

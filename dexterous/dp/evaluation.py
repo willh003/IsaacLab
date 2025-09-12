@@ -8,7 +8,11 @@ specifically for tasks involving object rotation towards goal poses.
 import torch
 import torch.nn.functional as F
 import numpy as np
-from .utils import get_termination_env_ids
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from dp.utils import get_termination_env_ids
 
 NUM_EVAL_ENVS = 128
 NUM_EVAL_STEPS = 200

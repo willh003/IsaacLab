@@ -9,6 +9,7 @@ import torch
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
+
 def quaternion_to_euler(q):
     """Convert quaternion (w, x, y, z) to Euler angles (roll, pitch, yaw)."""
     w, x, y, z = q
@@ -32,6 +33,7 @@ def quaternion_to_euler(q):
     
     return roll, pitch, yaw
 
+
 def quaternion_to_rotation_vector(q):
     """Convert quaternion to rotation vector (axis-angle representation)."""
     w, x, y, z = q
@@ -54,6 +56,7 @@ def quaternion_to_rotation_vector(q):
     
     axis = np.array([x, y, z]) / np.sin(angle/2)
     return axis * angle
+
 
 def main():
     """Visualize object quaternion states in dataset."""
@@ -107,6 +110,10 @@ def main():
     all_rotation_vectors = []
     episode_info = []
     
+    # Track short episodes
+    min_episode_length = 8
+    short_episodes = []
+    
     for i, episode_name in enumerate(episode_names):
         print(f"Processing episode {i+1}/{num_episodes}: {episode_name}")
         
@@ -119,6 +126,10 @@ def main():
         
         obs_data = episode.data["obs"]
         episode_length = len(obs_data["object_quat"])
+        
+        # Record short episodes
+        if episode_length < min_episode_length:
+            short_episodes.append((episode_name, episode_length))
         
         # Get object quaternions for this episode
         object_quats = obs_data["object_quat"].cpu().numpy()
@@ -138,6 +149,14 @@ def main():
     
     handler.close()
     
+    # Report short episodes
+    if short_episodes:
+        print("\nEpisodes shorter than min_episode_length=8:")
+        for name, length in short_episodes:
+            print(f"  - {name}: length={length}")
+    else:
+        print("All episodes are longer than min_episode_length=8")
+        
     if not all_quaternions:
         print("No valid episodes found for visualization")
         return
@@ -249,29 +268,10 @@ def main():
                 dpi=300, bbox_inches='tight')
     plt.close()
     
-    # 5. Distribution of final quaternions
+    # 5. Distribution of final Euler angles (not quaternions)
     if len(all_quaternions) > 1:
-        final_quats = np.array([quats[-1] for quats in all_quaternions])
         final_euler = np.array([angles[-1] for angles in all_euler_angles])
         
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        fig.suptitle('Distribution of Final Object Orientations', fontsize=16)
-        
-        # Quaternion components histogram
-        for comp_idx, label in enumerate(quat_labels):
-            ax = axes[comp_idx // 2, comp_idx % 2]
-            ax.hist(final_quats[:, comp_idx], bins=20, alpha=0.7, edgecolor='black')
-            ax.set_xlabel(f'Final Quaternion {label}')
-            ax.set_ylabel('Frequency')
-            ax.set_title(f'Distribution of Final {label} Component')
-            ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(args.output_dir, f'final_quaternion_distribution.{args.format}'), 
-                    dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # Euler angles distribution
         fig, axes = plt.subplots(1, 3, figsize=(15, 5))
         fig.suptitle('Distribution of Final Euler Angles', fontsize=16)
         
@@ -287,6 +287,22 @@ def main():
         plt.savefig(os.path.join(args.output_dir, f'final_euler_distribution.{args.format}'), 
                     dpi=300, bbox_inches='tight')
         plt.close()
+    
+    # 6. Distribution of Euler angles across all timesteps and episodes
+    all_euler_flat = np.concatenate(all_euler_angles, axis=0)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig.suptitle('Distribution of Euler Angles (All Timesteps, All Episodes)', fontsize=16)
+    for comp_idx, label in enumerate(euler_labels):
+        ax = axes[comp_idx]
+        ax.hist(np.degrees(all_euler_flat[:, comp_idx]), bins=60, alpha=0.8, edgecolor='black')
+        ax.set_xlabel(f'{label} (degrees)')
+        ax.set_ylabel('Frequency')
+        ax.set_title(f'{label} Distribution')
+        ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.output_dir, f'all_euler_distribution.{args.format}'), 
+                dpi=300, bbox_inches='tight')
+    plt.close()
     
     # Print summary statistics
     print(f"\nQuaternion Analysis Summary:")
@@ -315,8 +331,8 @@ def main():
     print(f"  - rotation_trajectories_3d.{args.format}")
     print(f"  - quaternion_magnitudes.{args.format}")
     if len(all_quaternions) > 1:
-        print(f"  - final_quaternion_distribution.{args.format}")
         print(f"  - final_euler_distribution.{args.format}")
+    print(f"  - all_euler_distribution.{args.format}")
 
 if __name__ == "__main__":
     main()

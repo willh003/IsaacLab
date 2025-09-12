@@ -37,6 +37,9 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeEnvCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rl_games_her_cfg_entry_point": f"{agents.__name__}:rl_games_sac_her.yaml",
+        "rl_games_sac_cfg_entry_point": f"{agents.__name__}:rl_games_sac.yaml",
+        "rl_games_sac_utd_cfg_entry_point": f"{agents.__name__}:rl_games_sac_utd.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
         "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
         "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
@@ -80,6 +83,21 @@ gym.register(
     disable_env_checker=True,
     kwargs={ 
         "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeMultiResetEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:gcdp_cfg.json"),
+    },
+)
+
+gym.register(
+    id="Isaac-Repose-Cube-Allegro-Contact-Multi-Reset-Stay20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={ 
+        "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeMultiResetEnvStay20",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",

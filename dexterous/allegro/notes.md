@@ -9,6 +9,9 @@ isaaclab train_rsl_rl.py --task=Isaac-Lift-Cube-Franka-Leap-v0 --headless --vide
 Good checkpoint (rsl_rl, manager based):
 /home/will/IsaacLab/dexterous/logs/rsl_rl/allegro_cube/2025-07-22_11-08-30/model_4999.pt
 
+Better checkpoint (rsl_rl, trained longer + starts in hand):
+/home/will/IsaacLab/dexterous/allegro/logs/rsl_rl/allegro_cube/2025-09-10_21-57-57/model_29499.pt
+
 train il:
 isaaclab train_il.py --task=Isaac-Repose-Cube-Allegro-v0 --dataset=/home/will/IsaacLab/dexterous/data/allegro_inhand_100k.hdf5 --algo=diffusion_policy --wandb online
 
