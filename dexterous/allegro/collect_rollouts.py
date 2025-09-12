@@ -152,6 +152,10 @@ def main():
                     
                 obs, rewards, dones, extras = env.step(actions)
                 
+                # Add rewards to episodes after step
+                for i in range(num_envs):
+                    current_episodes[i].add("rewards", rewards[i].cpu())
+                
                 termination_env_ids = get_termination_env_ids(env)
 
                 for successful_env_id in termination_env_ids["success"]:

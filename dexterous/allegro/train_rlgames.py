@@ -11,7 +11,7 @@ import argparse
 import sys
 
 from isaaclab.app import AppLauncher
-
+import torch
 
 
 # add argparse arguments
@@ -29,6 +29,7 @@ parser.add_argument("--checkpoint", type=str, default=None, help="Path to model 
 parser.add_argument("--sigma", type=str, default=None, help="The policy's initial standard deviation.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--config_name", type=str, default="rl_games_sac_cfg_entry_point", help="Name of the config entry point to use.")
+parser.add_argument("--dataset", type=str, default=None, help="Path to HDF5 dataset for replay buffer initialization.")
 
 
 # append AppLauncher cli args
@@ -56,41 +57,7 @@ from datetime import datetime
 
 from rl_games.common import env_configurations, vecenv
 from rl_games.common.algo_observer import IsaacAlgoObserver
-from rl_games.torch_runner import Runner
 
-class WandbAlgoObserver(IsaacAlgoObserver):
-    """Custom observer that logs directly to wandb with clean metric names."""
-    
-    def __init__(self):
-        super().__init__()
-        
-    def after_print_stats(self, frame, epoch_num, total_time):
-        """Override to log metrics directly to wandb."""
-        super().after_print_stats(frame, epoch_num, total_time)
-        # Let the parent class handle the standard logging
-        
-    def log_to_wandb(self, info_dict, frame):
-        """Log metrics directly to wandb with clean names."""
-        if not info_dict:
-            return
-            
-        wandb_metrics = {}
-        for key, value in info_dict.items():
-            # Clean up the metric names
-            clean_key = key
-            if isinstance(value, (int, float)):
-                # Remove common prefixes
-                if clean_key.startswith("Episode/"):
-                    clean_key = clean_key.replace("Episode/", "")
-                elif clean_key.startswith("episode/"):
-                    clean_key = clean_key.replace("episode/", "")
-                elif clean_key.startswith("train/"):
-                    clean_key = clean_key.replace("train/", "")
-                
-                wandb_metrics[clean_key] = value
-        
-        if wandb_metrics:
-            wandb.log(wandb_metrics, step=frame)
 
 from isaaclab.envs import (
     DirectMARLEnv,
@@ -112,6 +79,9 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import allegro.sac_her as sac_her
 import allegro.sac_utd as sac_utd
+from allegro.rl_games_utils import load_dataset_transitions, MixedDatasetSampler, Runner
+import h5py
+import numpy as np
 
 # [wph] Monkey Patch wandb.save to not save checkpoints
 import wandb
@@ -121,29 +91,6 @@ def selective_save(glob_str, base_path=None, policy="live"):
         return
     return original_save(glob_str, base_path=base_path, policy=policy)
 wandb.save = selective_save
-
-# Custom wandb logger to clean up metric names
-original_log = wandb.log
-def clean_metric_log(data, step=None, commit=None, sync=None):
-    """Clean up metric names by removing Episode/ prefix and other unwanted prefixes."""
-    if isinstance(data, dict):
-        cleaned_data = {}
-        for key, value in data.items():
-            # Remove common prefixes that we don't want
-            cleaned_key = key
-            if key.startswith("Episode/"):
-                cleaned_key = key.replace("Episode/", "")
-            elif key.startswith("episode/"):
-                cleaned_key = key.replace("episode/", "")
-            elif key.startswith("train/"):
-                cleaned_key = key.replace("train/", "")
-            
-            cleaned_data[cleaned_key] = value
-        return original_log(cleaned_data, step=step, commit=commit, sync=sync)
-    else:
-        return original_log(data, step=step, commit=commit, sync=sync)
-
-wandb.log = clean_metric_log
 
 # Use the config_name from command line arguments
 @hydra_task_config(args_cli.task, args_cli.config_name)
@@ -298,6 +245,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "device": agent_cfg["params"]["config"]["device"],
         "multi_gpu": agent_cfg["params"]["config"]["multi_gpu"],
         "seed": agent_cfg["params"]["seed"],
+        
+        # Dataset initialization
+        "dataset_path": args_cli.dataset,
+        "dataset_initialized": args_cli.dataset is not None,
     }
     
     wandb.init(
@@ -310,16 +261,51 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     )
     
     # create runner from rl-games
-    runner = Runner(WandbAlgoObserver())
+    runner = Runner(IsaacAlgoObserver())
 
 
     #runner.algo_factory.register_builder('sac_her', lambda **kwargs: sac_her.SACAgent(**kwargs))
     runner.algo_factory.register_builder('sac_utd', lambda **kwargs: sac_utd.SACUTDAgent(**kwargs))
     runner.load(agent_cfg)
+    runner.create_agent()
 
     # reset the agent and env
     runner.reset()
+    
+    # Initialize mixed dataset sampling if dataset is provided
+    if args_cli.dataset is not None:
+        print(f"[INFO] Loading dataset for mixed sampling: {args_cli.dataset}")
+        # Load transitions from dataset
+        dataset_transitions = load_dataset_transitions(
+            dataset_path=args_cli.dataset,
+            env_obs_shape=env.observation_space.shape,
+            env_action_shape=env.action_space.shape,
+            device=torch.device(agent_cfg["params"]["config"]["device"])
+        )
+        
+        # Get the SAC agent from the runner
+        agent = runner.agent
+        if hasattr(agent, 'replay_buffer'):
+            # Create mixed dataset sampler
+            mixed_sampler = MixedDatasetSampler(dataset_transitions, agent.replay_buffer)
+            
+            # Replace the agent's replay buffer sample method with mixed sampling
+            agent.replay_buffer.sample = mixed_sampler.sample
+            agent._mixed_sampler = mixed_sampler  # Keep reference to prevent garbage collection
+
+            replay_buffer_capacity = agent.replay_buffer.capacity
+            
+
+            print(f"[INFO] Successfully initialized mixed sampling with {len(dataset_transitions)} dataset transitions")
+            print(f"Replay buffer size: {agent.replay_buffer.idx}, capacity: {replay_buffer_capacity}")
+            
+            wandb.log({"dataset/num_transitions": len(dataset_transitions)})
+        else:
+            print("[WARNING] Agent does not have a replay_buffer attribute. Dataset initialization skipped.")
+    else:
+        print("[INFO] No dataset provided. Using standard replay buffer only.")
     # train the agent
+
     if args_cli.checkpoint is not None:
         runner.run({"train": True, "play": False, "sigma": train_sigma, "checkpoint": resume_path})
     else:
