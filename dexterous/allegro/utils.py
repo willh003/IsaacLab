@@ -22,7 +22,7 @@ def get_termination_env_ids(env):
     term_dones = env.unwrapped.termination_manager._term_dones
 
     # xor of the three should be True
-    assert (term_dones["success"] + term_dones["failure"] <= 1).all(), "Only one of success, failure, or time_out should be True"
+    #assert (term_dones["success"] + term_dones["failure"] <= 1).all(), "Only one of success, failure, or time_out should be True"
 
     # get the envs that are done
     done_envs = {

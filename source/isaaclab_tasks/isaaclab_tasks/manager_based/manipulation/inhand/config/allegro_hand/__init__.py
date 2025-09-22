@@ -37,9 +37,7 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeEnvCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
-        "rl_games_her_cfg_entry_point": f"{agents.__name__}:rl_games_sac_her.yaml",
-        "rl_games_sac_cfg_entry_point": f"{agents.__name__}:rl_games_sac.yaml",
-        "rl_games_sac_utd_cfg_entry_point": f"{agents.__name__}:rl_games_sac_utd.yaml",
+        "rl_games_sac_rlpd_cfg_entry_point": f"{agents.__name__}:rl_games_sac_rlpd.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
         "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
         "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
@@ -56,6 +54,7 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_td3_cfg_entry_point": f"{agents.__name__}:skrl_td3_cfg.yaml",
         "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
         "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
         "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
@@ -84,6 +83,7 @@ gym.register(
     kwargs={ 
         "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeMultiResetEnvCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
+        "rl_games_sac_rlpd_cfg_entry_point": f"{agents.__name__}:rl_games_sac_rlpd.yaml",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
         "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
@@ -96,7 +96,7 @@ gym.register(
     id="Isaac-Repose-Cube-Allegro-Contact-Multi-Reset-Stay20-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
-    kwargs={ 
+    kwargs={
         "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeMultiResetEnvStay20",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
@@ -106,6 +106,7 @@ gym.register(
         "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:gcdp_cfg.json"),
     },
 )
+
 
 """
 isaaclab collect_rollouts.py --checkpoint /home/will/IsaacLab/dexterous/allegro/logs/rsl_rl/allegro_cube/2025-08-29_13-04-36/model_29997.pt --task Isaac-Repose-Cube-Allegro-Contact-Trajectory-v0 --headless --num_rollouts 1000
@@ -201,6 +202,71 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubeNoVelObsPPORunnerCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
+    },
+)
+
+##
+# Environment with explicit Box(-1, 1) action space
+##
+
+gym.register(
+    id="Isaac-Repose-Cube-Allegro-TwoAxis45Deg-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeTwoAxis45DegEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
+    },
+)
+
+gym.register(
+    id="Isaac-Repose-Cube-Allegro-SingleAxis-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeSingleAxisEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
+    },
+)
+
+gym.register(
+    id="Isaac-Repose-Cube-Allegro-SingleAxis-Stay20-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeSingleAxisStay20EnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
+        "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
+        "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),
+    },
+)
+
+gym.register(
+    id="Isaac-Repose-Cube-Allegro-BoxAction-v0",
+    entry_point=f"{__name__}.allegro_env_cfg:AllegroCubeBoxActionEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.allegro_env_cfg:AllegroCubeBoxActionEnvCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:AllegroCubePPORunnerCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_td3_cfg_entry_point": f"{agents.__name__}:skrl_td3_cfg.yaml",
         "robomimic_bc_cfg_entry_point": get_robomimic_entry_point("bc", f"{agents.__name__}:bc_cfg.json"),
         "robomimic_bc_rnn_low_dim_cfg_entry_point": get_robomimic_entry_point("bc_rnn_low_dim", f"{agents.__name__}:bc_rnn_low_dim.json"),
         "robomimic_diffusion_policy_cfg_entry_point": get_robomimic_entry_point("diffusion_policy", f"{agents.__name__}:diffusion_policy_cfg.json"),

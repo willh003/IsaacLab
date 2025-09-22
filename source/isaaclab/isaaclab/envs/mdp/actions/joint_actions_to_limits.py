@@ -8,6 +8,8 @@ from __future__ import annotations
 import torch
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
+import matplotlib.pyplot as plt
+import numpy as np
 
 import omni.log
 
@@ -68,6 +70,11 @@ class JointPositionToLimitsAction(ActionTerm):
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
         self._processed_actions = torch.zeros_like(self.raw_actions)
 
+        # Action buffer for plotting (temporary)
+        self._action_buffer = []
+        self._buffer_size = 1000
+        self._samples_collected = 0
+
         # parse scale
         if isinstance(cfg.scale, (float, int)):
             self._scale = float(cfg.scale)
@@ -112,24 +119,90 @@ class JointPositionToLimitsAction(ActionTerm):
     def process_actions(self, actions: torch.Tensor):
         # store the raw actions
         self._raw_actions[:] = actions
+        
+
         # apply affine transformations
+        #print(f"raw action min: {self._raw_actions.min()}, raw action max: {self._raw_actions.max()}")
         self._processed_actions = self._raw_actions * self._scale
+        #print(f"scale action min: {self._processed_actions.min()}, processed action max: {self._processed_actions.max()}")
         if self.cfg.clip is not None:
             self._processed_actions = torch.clamp(
                 self._processed_actions, min=self._clip[:, :, 0], max=self._clip[:, :, 1]
             )
+            #print(f"clip action min: {self._processed_actions.min()}, processed action max: {self._processed_actions.max()}")
+            #print(f"clip params: {self._clip[:, :, 0]}, {self._clip[:, :, 1]}")
         # rescale the position targets if configured
         # this is useful when the input actions are in the range [-1, 1]
         if self.cfg.rescale_to_limits:
             # clip to [-1, 1]
             actions = self._processed_actions.clamp(-1.0, 1.0)
+            #print(f"scaled to limits min: {actions.min()}, scaled to limits max: {actions.max()}")
             # rescale within the joint limits
             actions = math_utils.unscale_transform(
                 actions,
                 self._asset.data.soft_joint_pos_limits[:, self._joint_ids, 0],
                 self._asset.data.soft_joint_pos_limits[:, self._joint_ids, 1],
             )
+            #print(f"joint limits min: {self._asset.data.soft_joint_pos_limits[:, self._joint_ids, 0]}, joint limits max: {self._asset.data.soft_joint_pos_limits[:, self._joint_ids, 1] }")
             self._processed_actions[:] = actions[:]
+    
+        #print(f"processed action min: {self._processed_actions.min()}, processed action max: {self._processed_actions.max()}")
+        
+        # Add to action buffer (temporary)
+        if self._samples_collected < self._buffer_size:
+            # Store processed actions from all environments
+            self._action_buffer.append(self._processed_actions.detach().cpu().numpy())
+            self._samples_collected += self.num_envs
+            
+            # Check if we've collected enough samples
+            # if self._samples_collected >= self._buffer_size:
+            #     self._plot_action_distributions()
+
+    def _plot_action_distributions(self):
+        """Plot action distributions for each dimension with joint limits."""
+        if not self._action_buffer:
+            return
+            
+        # Concatenate all collected actions
+        all_actions = np.concatenate(self._action_buffer, axis=0)
+        
+        # Get joint limits (use first environment's limits as they should be the same)
+        joint_limits_min = self._asset.data.soft_joint_pos_limits[0, self._joint_ids, 0].cpu().numpy()
+        joint_limits_max = self._asset.data.soft_joint_pos_limits[0, self._joint_ids, 1].cpu().numpy()
+        from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+
+        num_dims = all_actions.shape[1]
+        fig, axes = plt.subplots(2, (num_dims + 1) // 2, figsize=(15, 10))
+        if num_dims == 1:
+            axes = [axes]
+        else:
+            axes = axes.flatten()
+        
+        for i in range(num_dims):
+            ax = axes[i]
+            
+            # Plot histogram of actions
+            ax.hist(all_actions[:, i], bins=50, alpha=0.7, density=True)
+            
+            # Add markers for joint limits
+            ax.scatter([joint_limits_min[i]], [0], color='red', marker='^', s=20, zorder=5)
+            ax.scatter([joint_limits_max[i]], [0], color='green', marker='^', s=20, zorder=5)
+            
+            # Set labels and title
+            ax.set_title(f'Joint {i}', fontsize=10)
+            ax.set_xlabel('Action Value')
+            ax.set_ylabel('Density')
+            ax.grid(True, alpha=0.3)
+        
+        # Hide unused subplots
+        for i in range(num_dims, len(axes)):
+            axes[i].set_visible(False)
+        
+        plt.tight_layout()
+        plt.savefig('action_distributions.png', dpi=300, bbox_inches='tight')
+        
+        #print(f"Action distribution plots saved as 'action_distributions.png'")
+        #print(f"Collected {self._samples_collected} action samples across {len(self._action_buffer)} batches")
 
     def apply_actions(self):
         # set position targets

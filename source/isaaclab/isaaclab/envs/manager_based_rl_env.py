@@ -171,8 +171,10 @@ class ManagerBasedRLEnv(ManagerBasedEnv, gym.Env):
             A tuple containing the observations, rewards, resets (terminated and truncated) and extras.
         """
         # process actions
+        #print(f"Action min: {action.min()}, action max: {action.max()}")
+    
         self.action_manager.process_action(action.to(self.device))
-
+        #print(f" processed Action min: {action.min()}, action max: {action.max()}")
         self.recorder_manager.record_pre_step()
 
         # check if we need to do rendering within the physics loop
@@ -183,6 +185,7 @@ class ManagerBasedRLEnv(ManagerBasedEnv, gym.Env):
         for _ in range(self.cfg.decimation):
             self._sim_step_counter += 1
             # set actions into buffers
+            
             self.action_manager.apply_action()
             # set actions into simulator
             self.scene.write_data_to_sim()

@@ -66,6 +66,8 @@
             }
         },
         "goal_mode": "relabel",
+        "goals_per_sequence": 4,
+        "max_lookahead": 8,
         "goal_horizon": null,
         "cuda": true,
         "batch_size": 100,
@@ -144,7 +146,6 @@
             },
             "goal": {
                 "low_dim": [
-                    "object_pos",
                     "object_quat"
                 ],
                 "rgb": [],

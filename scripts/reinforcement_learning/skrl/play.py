@@ -42,7 +42,7 @@ parser.add_argument(
     "--algorithm",
     type=str,
     default="PPO",
-    choices=["AMP", "PPO", "IPPO", "MAPPO"],
+    choices=["AMP", "PPO", "IPPO", "MAPPO", "TD3"],
     help="The RL algorithm used for training the skrl agent.",
 )
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
@@ -109,10 +109,10 @@ def main():
     env_cfg = parse_env_cfg(
         args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=not args_cli.disable_fabric
     )
-    try:
-        experiment_cfg = load_cfg_from_registry(task_name, f"skrl_{algorithm}_cfg_entry_point")
-    except ValueError:
-        experiment_cfg = load_cfg_from_registry(task_name, "skrl_cfg_entry_point")
+    agent_cfg_entry_point = "skrl_cfg_entry_point" if algorithm in ["ppo"] else f"skrl_{algorithm}_cfg_entry_point"
+
+    experiment_cfg = load_cfg_from_registry(task_name, agent_cfg_entry_point)
+
 
     # specify directory for logging experiments (load checkpoint)
     log_root_path = os.path.join("logs", "skrl", experiment_cfg["agent"]["experiment"]["directory"])

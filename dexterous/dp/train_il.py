@@ -212,6 +212,48 @@ def normalize_hdf5_actions(config: Config, log_dir: str) -> str:
 
     return normalized_path
 
+def clip_hdf5_actions(config: Config, log_dir: str) -> str:
+    """Clips actions in hdf5 dataset to the range [-1, 1].
+
+    Args:
+        config: The configuration object containing dataset path.
+        log_dir: Directory to save normalization parameters.
+    """
+    assert "normalized" not in config.train.data, "Dataset already normalized - make sure to provide path to unnormalize data"
+    
+    base, ext = os.path.splitext(config.train.data)
+    clipped_path = base + "_clipped" + ext
+
+    # Copy the original dataset
+    print(f"Creating clipped dataset at {clipped_path}")
+    shutil.copyfile(config.train.data, clipped_path)
+
+    # Open the new dataset and clip the actions and obs/last_action
+    with h5py.File(clipped_path, "r+") as f:
+        dataset_paths = [f"/data/demo_{str(i)}/actions" for i in range(len(f["data"].keys()))]
+        obs_last_action_paths = [f"/data/demo_{str(i)}/obs/last_action" for i in range(len(f["data"].keys()))]
+
+        # Clip the actions
+        for i, path in enumerate(dataset_paths):
+            data = np.array(f[path])
+            clipped_data = np.clip(data, -1, 1)
+            del f[path]
+            f[path] = clipped_data
+
+        # Clip the obs/last_action
+        for i, path in enumerate(obs_last_action_paths):
+            data = np.array(f[path])
+            clipped_data = np.clip(data, -1, 1)
+            del f[path]
+            f[path] = clipped_data
+
+        # Save the min and max values to log directory
+        # for compatibility with normalize_hdf5_actions
+        with open(os.path.join(log_dir, "normalization_params.txt"), "w") as f:
+            f.write(f"min: {-1.0}\n")
+            f.write(f"max: {1.0}\n")
+    return clipped_path
+
 
 def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: str, wandb_mode: str = "online"):
     """Train a model using the algorithm specified in config.
@@ -328,6 +370,7 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         
         return batch_out
 
+
     # initialize data loaders
     train_loader = DataLoader(
         dataset=trainset,
@@ -338,11 +381,9 @@ def train(config: Config, device: str, log_dir: str, ckpt_dir: str, video_dir: s
         drop_last=True,
         collate_fn=custom_collate_fn,
     )
-
-
     if config.experiment.validate:
         # cap num workers for validation dataset at 1
-        num_workers = min(config.train.num_data_workers, 1)
+        num_workers = config.train.num_data_workers # min(config.train.num_data_workers, 1)
         valid_sampler = validset.get_dataset_sampler()
         valid_loader = DataLoader(
             dataset=validset,
@@ -527,12 +568,9 @@ def main(args: argparse.Namespace):
             process_dataset = parent / new_name
             
             # Copy the file if it doesn't already exist
-            if not process_dataset.exists():
-                print(f"Creating dataset copy for CUDA device {args.cuda}: {process_dataset}")
-                shutil.copy2(original_dataset, process_dataset)
-            else:
-                print(f"Using existing dataset copy for CUDA device {args.cuda}: {process_dataset}")
-                
+            print(f"Creating dataset copy for CUDA device {args.cuda}: {process_dataset}")
+            shutil.copy2(original_dataset, process_dataset)
+
             config.train.data = str(process_dataset)
         else:
             config.train.data = args.dataset
@@ -554,8 +592,12 @@ def main(args: argparse.Namespace):
 
     log_dir, ckpt_dir, video_dir = get_exp_dir(config.train.output_dir, config.experiment.name, config.experiment.save.enabled)
     
+    
+    # unlock config because clip_actions may not be a property
+    with config.unlocked():
+        if hasattr(config.train, "clip_actions") and config.train.clip_actions:
+            config.train.data = clip_hdf5_actions(config, log_dir)
     if args.normalize_training_actions:
-        
         config.train.data = normalize_hdf5_actions(config, log_dir)
 
     # get torch device

@@ -15,6 +15,8 @@ from .orientation_command import InHandReOrientationCommand
 from .success_count_reset_command import SuccessCountResetCommand
 from .trajectory_command import TrajectoryCommand
 from .continuous_subgoal_command import ContinuousSubgoalCommand
+from .two_axis_45deg_command import TwoAxis45DegCommand
+from .single_axis_command import SingleAxisCommand
 
 
 @configclass
@@ -236,3 +238,59 @@ class ContinuousSubgoalCommandCfg(InHandReOrientationCommandCfg):
 
     min_steps_in_subgoal: int = 20
     """Minimum number of steps to stay in a subgoal before resampling."""
+
+
+@configclass
+class TwoAxis45DegCommandCfg(InHandReOrientationCommandCfg):
+    """Configuration for the 2-axis 45-degree orientation command term.
+
+    This configuration creates a command that generates orientation goals by applying
+    45-degree rotations around any 2 of the 3 axes (roll, pitch, yaw). The command
+    randomly selects 2 axes out of 3 and applies ±45-degree rotations around each
+    selected axis in order.
+
+    Possible axis combinations:
+    - Roll + Pitch (X + Y axes)
+    - Roll + Yaw (X + Z axes)
+    - Pitch + Yaw (Y + Z axes)
+
+    Please refer to the :class:`TwoAxis45DegCommand` class for more details.
+    """
+
+    class_type: type = TwoAxis45DegCommand
+
+
+@configclass
+class SingleAxisCommandCfg(InHandReOrientationCommandCfg):
+    """Configuration for the single-axis orientation command term.
+
+    This configuration creates a command that generates orientation goals by randomly
+    selecting one axis (roll, pitch, or yaw) and then sampling a random rotation angle
+    around that axis within the specified range.
+
+    The possible axes are:
+    - Roll (X-axis rotation)
+    - Pitch (Y-axis rotation)
+    - Yaw (Z-axis rotation)
+
+    For each goal generation:
+    1. Randomly select one of the three axes
+    2. Sample a random angle within the specified range for that axis
+    3. Generate the quaternion for that single-axis rotation
+
+    Please refer to the :class:`SingleAxisCommand` class for more details.
+    """
+
+    class_type: type = SingleAxisCommand
+
+    angle_range: float = 3.14159265359  # π radians (180 degrees)
+    """Maximum rotation angle in radians for single-axis rotations.
+
+    The rotation angles are sampled uniformly from [-angle_range, +angle_range].
+    Default is π radians (180 degrees), allowing full rotation range.
+
+    Examples:
+    - π/4 (45°): Small rotations
+    - π/2 (90°): Quarter turn rotations
+    - π (180°): Half turn rotations (default)
+    """

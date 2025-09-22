@@ -105,6 +105,12 @@ class SACUTDAgent(BaseAlgorithm):
 
         self.algo_observer = config['features']['observer']
 
+        self.q_values_buffer = {'q1': [], 'q2': [], 'target_q': []}
+
+        self.action_mins = None
+        self.action_maxs = None
+
+
     def load_networks(self, params):
         builder = model_builder.ModelBuilder()
         self.config['network'] = builder.load(params)
@@ -308,7 +314,12 @@ class SACUTDAgent(BaseAlgorithm):
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        return critic_loss.detach(), critic1_loss.detach(), critic2_loss.detach()
+        # Calculate average Q values for logging
+        avg_q1 = current_Q1.mean().detach()
+        avg_q2 = current_Q2.mean().detach()
+        avg_target_q = target_Q.mean().detach()
+
+        return critic_loss.detach(), critic1_loss.detach(), critic2_loss.detach(), avg_q1, avg_q2, avg_target_q
 
     def update_actor_and_alpha(self, obs, step):
         for p in self.model.sac_network.critic.parameters():
@@ -349,19 +360,21 @@ class SACUTDAgent(BaseAlgorithm):
 
     def update_single(self, step):
         """Perform a single gradient update."""
-        obs, action, reward, next_obs, done = self.replay_buffer.sample(self.batch_size)
+        # NOTE: equivalent to offline rl
+        offline_ratio = 0.5
+        obs, action, reward, next_obs, done = self.replay_buffer.sample(self.batch_size, offline_ratio)
         not_done = ~done
 
         obs = self.preproc_obs(obs)
         next_obs = self.preproc_obs(next_obs)
-        critic_loss, critic1_loss, critic2_loss = self.update_critic(obs, action, reward, next_obs, not_done, step)
+        critic_loss, critic1_loss, critic2_loss, avg_q1, avg_q2, avg_target_q = self.update_critic(obs, action, reward, next_obs, not_done, step)
 
         actor_loss, entropy, alpha, alpha_loss = self.update_actor_and_alpha(obs, step)
 
         actor_loss_info = actor_loss, entropy, alpha, alpha_loss
         self.soft_update_params(self.model.sac_network.critic, self.model.sac_network.critic_target,
                                      self.critic_tau)
-        return actor_loss_info, critic1_loss, critic2_loss
+        return actor_loss_info, critic1_loss, critic2_loss, avg_q1, avg_q2, avg_target_q
 
     def should_update_this_step(self):
         """Determine if we should perform updates this step based on UTD ratio."""
@@ -385,7 +398,7 @@ class SACUTDAgent(BaseAlgorithm):
         num_updates = self.should_update_this_step()
         
         if num_updates == 0:
-            return None, None, None
+            return None, None, None, None, None, None
         
         # Perform the required number of updates
         actor_losses = []
@@ -394,9 +407,12 @@ class SACUTDAgent(BaseAlgorithm):
         alpha_losses = []
         critic1_losses = []
         critic2_losses = []
+        q1_values = []
+        q2_values = []
+        target_q_values = []
         
         for _ in range(num_updates):
-            actor_loss_info, critic1_loss, critic2_loss = self.update_single(step)
+            actor_loss_info, critic1_loss, critic2_loss, avg_q1, avg_q2, avg_target_q = self.update_single(step)
             if actor_loss_info is not None:
                 actor_loss, entropy, alpha, alpha_loss = actor_loss_info
                 actor_losses.append(actor_loss)
@@ -405,8 +421,11 @@ class SACUTDAgent(BaseAlgorithm):
                 alpha_losses.append(alpha_loss)
                 critic1_losses.append(critic1_loss)
                 critic2_losses.append(critic2_loss)
+                q1_values.append(avg_q1)
+                q2_values.append(avg_q2)
+                target_q_values.append(avg_target_q)
         
-        # Return averaged losses
+        # Return averaged losses and Q values
         if actor_losses:
             avg_actor_loss = torch.stack(actor_losses).mean()
             avg_entropy = torch.stack(entropies).mean()
@@ -414,10 +433,13 @@ class SACUTDAgent(BaseAlgorithm):
             avg_alpha_loss = torch.stack([loss for loss in alpha_losses if loss is not None]).mean() if any(alpha_losses) else None
             avg_critic1_loss = torch.stack(critic1_losses).mean()
             avg_critic2_loss = torch.stack(critic2_losses).mean()
+            avg_q1 = torch.stack(q1_values).mean()
+            avg_q2 = torch.stack(q2_values).mean()
+            avg_target_q = torch.stack(target_q_values).mean()
             
-            return (avg_actor_loss, avg_entropy, avg_alpha, avg_alpha_loss), avg_critic1_loss, avg_critic2_loss
+            return (avg_actor_loss, avg_entropy, avg_alpha, avg_alpha_loss), avg_critic1_loss, avg_critic2_loss, avg_q1, avg_q2, avg_target_q
         else:
-            return None, None, None
+            return None, None, None, None, None, None
 
     def preproc_obs(self, obs):
         if isinstance(obs, dict):
@@ -470,6 +492,8 @@ class SACUTDAgent(BaseAlgorithm):
 
     def env_step(self, actions):
         actions = self.preprocess_actions(actions)
+
+        
         obs, rewards, dones, infos = self.vec_env.step(actions) # (obs_space) -> (n, obs_space)
 
         if self.is_tensor_obses:
@@ -490,8 +514,10 @@ class SACUTDAgent(BaseAlgorithm):
         dist = self.model.actor(obs)
 
         actions = dist.sample() if sample else dist.mean
+
         actions = actions.clamp(*self.action_range)
         assert actions.ndim == 2
+
 
         return actions
 
@@ -572,7 +598,11 @@ class SACUTDAgent(BaseAlgorithm):
             if isinstance(next_obs, dict):    
                 next_obs_processed = next_obs['obs']
 
-            self.obs = next_obs.clone()
+            if isinstance(next_obs, dict):    
+                next_obs_processed = next_obs['obs']
+                self.obs = next_obs_processed.clone()
+            else:
+                self.obs = next_obs.clone()
 
             rewards = self.rewards_shaper(rewards)
 
@@ -586,7 +616,7 @@ class SACUTDAgent(BaseAlgorithm):
                 update_time_start = time.time()
                 
                 # UTD-aware update
-                actor_loss_info, critic1_loss, critic2_loss = self.update(self.epoch_num)
+                actor_loss_info, critic1_loss, critic2_loss, avg_q1, avg_q2, avg_target_q = self.update(self.epoch_num)
                 
                 update_time_end = time.time()
                 update_time = update_time_end - update_time_start
@@ -596,6 +626,11 @@ class SACUTDAgent(BaseAlgorithm):
                     self.extract_actor_stats(actor_losses, entropies, alphas, alpha_losses, actor_loss_info)
                     critic1_losses.append(critic1_loss)
                     critic2_losses.append(critic2_loss)
+                    # Store Q values for logging (will be handled in train method)
+
+                    self.q_values_buffer['q1'].append(avg_q1)
+                    self.q_values_buffer['q2'].append(avg_q2)
+                    self.q_values_buffer['target_q'].append(avg_target_q)
             else:
                 update_time = 0
 
@@ -609,6 +644,7 @@ class SACUTDAgent(BaseAlgorithm):
 
     def train_epoch(self):
         random_exploration = self.epoch_num < self.num_warmup_steps
+        print("random exploration: ", random_exploration)
         return self.play_steps(random_exploration)
 
     def train(self):
@@ -635,40 +671,107 @@ class SACUTDAgent(BaseAlgorithm):
             print_statistics(self.print_stats, curr_frames, step_time, play_time, epoch_total_time, 
                 self.epoch_num, self.max_epochs, self.frame, self.max_frames)
 
+            # Log performance metrics to both tensorboard and wandb
             self.writer.add_scalar('performance/step_inference_rl_update_fps', fps_total, self.frame)
             self.writer.add_scalar('performance/step_inference_fps', fps_step_inference, self.frame)
             self.writer.add_scalar('performance/step_fps', fps_step, self.frame)
             self.writer.add_scalar('performance/rl_update_time', update_time, self.frame)
             self.writer.add_scalar('performance/step_inference_time', play_time, self.frame)
             self.writer.add_scalar('performance/step_time', step_time, self.frame)
+            
+            # Also log to wandb
+            import wandb
+            wandb.log({
+                'performance/step_inference_rl_update_fps': fps_total,
+                'performance/step_inference_fps': fps_step_inference, 
+                'performance/step_fps': fps_step,
+                'performance/rl_update_time': update_time,
+                'performance/step_inference_time': play_time,
+                'performance/step_time': step_time
+            }, step=self.epoch_num)
 
             if self.epoch_num >= self.num_warmup_steps:
                 if actor_losses:  # Only log if we have losses
-                    self.writer.add_scalar('losses/a_loss', torch_ext.mean_list(actor_losses).item(), self.frame)
-                    self.writer.add_scalar('losses/c1_loss', torch_ext.mean_list(critic1_losses).item(), self.frame)
-                    self.writer.add_scalar('losses/c2_loss', torch_ext.mean_list(critic2_losses).item(), self.frame)
-                    self.writer.add_scalar('losses/entropy', torch_ext.mean_list(entropies).item(), self.frame)
+                    # Log training losses to tensorboard
+                    a_loss_val = torch_ext.mean_list(actor_losses).item()
+                    c1_loss_val = torch_ext.mean_list(critic1_losses).item()
+                    c2_loss_val = torch_ext.mean_list(critic2_losses).item()
+                    entropy_val = torch_ext.mean_list(entropies).item()
+                    alpha_val = torch_ext.mean_list(alphas).item()
+                    
+                    self.writer.add_scalar('losses/a_loss', a_loss_val, self.frame)
+                    self.writer.add_scalar('losses/c1_loss', c1_loss_val, self.frame)
+                    self.writer.add_scalar('losses/c2_loss', c2_loss_val, self.frame)
+                    self.writer.add_scalar('losses/entropy', entropy_val, self.frame)
+                    self.writer.add_scalar('info/alpha', alpha_val, self.frame)
+                    
+                    # Log Q values if available
+                    if hasattr(self, 'q_values_buffer') and self.q_values_buffer['q1']:
+                        avg_q1_val = torch_ext.mean_list(self.q_values_buffer['q1']).item()
+                        avg_q2_val = torch_ext.mean_list(self.q_values_buffer['q2']).item()
+                        avg_target_q_val = torch_ext.mean_list(self.q_values_buffer['target_q']).item()
+                        avg_q_val = (avg_q1_val + avg_q2_val) / 2.0
+                        
+                        self.writer.add_scalar('critic/avg_q1', avg_q1_val, self.frame)
+                        self.writer.add_scalar('critic/avg_q2', avg_q2_val, self.frame)
+                        self.writer.add_scalar('critic/avg_q', avg_q_val, self.frame)
+                        self.writer.add_scalar('critic/avg_target_q', avg_target_q_val, self.frame)
+                        
+                        # Clear Q values buffer for next epoch
+                        self.q_values_buffer = {'q1': [], 'q2': [], 'target_q': []}
+                    
+                    # Also log to wandb
+                    wandb_losses = {
+                        'losses/actor_loss': a_loss_val,
+                        'losses/critic1_loss': c1_loss_val,
+                        'losses/critic2_loss': c2_loss_val,
+                        'losses/entropy': entropy_val,
+                        'info/alpha': alpha_val
+                    }
+                    
+                    # Add Q values to wandb if available
+                    wandb_losses.update({
+                        'critic/avg_q1': avg_q1_val,
+                        'critic/avg_q2': avg_q2_val,
+                        'critic/avg_q': avg_q_val,
+                        'critic/avg_target_q': avg_target_q_val
+                    })
 
                     if alpha_losses and alpha_losses[0] is not None:
-                        self.writer.add_scalar('losses/alpha_loss', torch_ext.mean_list([loss for loss in alpha_losses if loss is not None]).item(), self.frame)
-                    self.writer.add_scalar('info/alpha', torch_ext.mean_list(alphas).item(), self.frame)
+                        alpha_loss_val = torch_ext.mean_list([loss for loss in alpha_losses if loss is not None]).item()
+                        self.writer.add_scalar('losses/alpha_loss', alpha_loss_val, self.frame)
+                        wandb_losses['losses/alpha_loss'] = alpha_loss_val
+                    
+                    wandb.log(wandb_losses, step=self.epoch_num)
 
-            # Log UTD-specific metrics
+            # Log UTD-specific metrics to both tensorboard and wandb
             self.writer.add_scalar('info/utd_ratio', self.utd_ratio, self.frame)
             self.writer.add_scalar('info/pending_updates', self.pending_updates, self.frame)
             self.writer.add_scalar('info/update_counter', self.update_counter, self.frame)
-
             self.writer.add_scalar('info/epochs', self.epoch_num, self.frame)
+            
+            wandb.log({
+                'info/utd_ratio': self.utd_ratio,
+                'info/pending_updates': self.pending_updates,
+                'info/update_counter': self.update_counter,
+                'info/epochs': self.epoch_num
+            }, step=self.epoch_num)
             self.algo_observer.after_print_stats(self.frame, self.epoch_num, total_time)
 
             if self.game_rewards.current_size > 0:
                 mean_rewards = self.game_rewards.get_mean()
                 mean_lengths = self.game_lengths.get_mean()
 
+                # Log rewards/lengths to both tensorboard and wandb
                 self.writer.add_scalar('rewards/step', mean_rewards, self.frame)
                 self.writer.add_scalar('rewards/time', mean_rewards, total_time)
                 self.writer.add_scalar('episode_lengths/step', mean_lengths, self.frame)
                 self.writer.add_scalar('episode_lengths/time', mean_lengths, total_time)
+                
+                wandb.log({
+                    'rewards/mean_reward': mean_rewards.item() if hasattr(mean_rewards, 'item') else mean_rewards,
+                    'episode_lengths/mean_length': mean_lengths.item() if hasattr(mean_lengths, 'item') else mean_lengths,
+                }, step=self.epoch_num)
                 checkpoint_name = self.config['name'] + '_ep_' + str(self.epoch_num) + '_rew_' + str(mean_rewards)
 
                 should_exit = False

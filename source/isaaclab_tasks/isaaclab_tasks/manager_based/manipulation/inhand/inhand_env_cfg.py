@@ -55,8 +55,8 @@ class InHandObjectSceneCfg(InteractiveSceneCfg):
             ),
             mass_props=sim_utils.MassPropertiesCfg(density=400.0),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.1, 0.56), rot=(1.0, 0.0, 0.0, 0.0)), #TODO @Will: made this -.1 instead of -.19 for leap
-        #init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.19, 0.56), rot=(1.0, 0.0, 0.0, 0.0)), #TODO: @Will: use this for allegro
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.1, 0.56), rot=(1.0, 0.0, 0.0, 0.0)), #TODO @Will: made this -.1 instead of -.19 for DP training and leap (easier reset in palm)
+        #init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -0.19, 0.56), rot=(1.0, 0.0, 0.0, 0.0)), #TODO: @Will: harder reset in fingers (allegro original)
     )
 
     # lights

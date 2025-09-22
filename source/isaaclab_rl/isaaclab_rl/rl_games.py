@@ -111,6 +111,9 @@ class RlGamesVecEnvWrapper(IVecEnv):
         else:
             self.rlg_num_states = self.state_space.shape[0]
 
+        self.obs_buffer= []
+        self.is_plotted = False
+
     def __str__(self):
         """Returns the wrapper name and the :attr:`env` representation string."""
         return (
@@ -243,6 +246,11 @@ class RlGamesVecEnvWrapper(IVecEnv):
         # perform environment step
         obs_dict, rew, terminated, truncated, extras = self.env.step(actions)
 
+
+        min_obs = {k: v.min() for k,v in obs_dict.items()}
+        max_obs = {k: v.max() for k,v in obs_dict.items()}   
+        print(f"obs_dict min: {min_obs}, obs_dict max: {max_obs}")
+
         # move time out information to the extras dict
         # this is only needed for infinite horizon tasks
         # note: only useful when `value_bootstrap` is True in the agent configuration
@@ -250,6 +258,11 @@ class RlGamesVecEnvWrapper(IVecEnv):
             extras["time_outs"] = truncated.to(device=self._rl_device)
         # process observations and states
         obs_and_states = self._process_obs(obs_dict)
+
+
+        min_obs = {k: v.min() for k,v in obs_dict.items()}
+        max_obs = {k: v.max() for k,v in obs_dict.items()}   
+        print(f"obs_dict min: {min_obs}, obs_dict max: {max_obs}")
         # move buffers to rl-device
         # note: we perform clone to prevent issues when rl-device and sim-device are the same.
         rew = rew.to(device=self._rl_device)
@@ -261,10 +274,60 @@ class RlGamesVecEnvWrapper(IVecEnv):
         if "log" in extras:
             extras["episode"] = extras.pop("log")
 
+        if len(self.obs_buffer) < 100:
+            self.obs_buffer.append(obs_dict['policy'])
+            print(len(self.obs_buffer))
+
+        if len(self.obs_buffer) >= 100 and not self.is_plotted:
+            self.plot_obs_buffer()
+            self.is_plotted = True
         return obs_and_states, rew, dones, extras
 
     def close(self):  # noqa: D102
         return self.env.close()
+
+    def plot_obs_buffer(self):
+        obs_buffer = torch.stack(self.obs_buffer).detach().cpu().numpy()
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        # Get the number of observation dimensions
+        num_dims = obs_buffer.shape[-1]
+        
+        # Calculate grid dimensions
+        cols = int(np.ceil(np.sqrt(num_dims)))
+        rows = int(np.ceil(num_dims / cols))
+        
+        # Create a grid of subplots
+        fig, axes = plt.subplots(rows, cols, figsize=(cols * 1.0, rows * 1.0))
+        fig.subplots_adjust(hspace=0.3, wspace=0.3)
+        
+        # Handle case where we have only one row or column
+        if rows == 1:
+            axes_flat = axes if cols == 1 else axes
+        else:
+            axes_flat = axes.flatten()
+        
+        # Plot distribution for each dimension
+        for i in range(num_dims):
+            ax = axes_flat[i]
+            dim_data = obs_buffer[:, :, i].flatten()
+            ax.hist(dim_data, bins=20, alpha=0.7)
+            
+            # Set min/max labels on x-axis
+            min_val = dim_data.min()
+            max_val = dim_data.max()
+            ax.set_xticks([min_val, max_val])
+            ax.set_xticklabels([f'{min_val:.2f}', f'{max_val:.2f}'], fontsize=6)
+            ax.set_yticks([])
+            ax.set_xlim(min_val, max_val)
+        
+        # Hide unused subplots
+        for i in range(num_dims, len(axes_flat)):
+            axes_flat[i].set_visible(False)
+        
+        plt.savefig('obs_dist.png', dpi=150, bbox_inches='tight')
+        plt.close()
 
     """
     Helper functions

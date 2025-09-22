@@ -1,14 +1,14 @@
-# Reward Visualization Script
+# Reward and Return Distribution Visualization Script
 
-This script visualizes rewards over trajectories in HDF5 datasets with boxplots at each timestep.
+This script visualizes reward distributions at four key points in trajectories and return distributions with different discount factors.
 
 ## Features
 
-- **Boxplot visualization**: Shows reward distribution across all trajectories at each timestep
-- **Individual trajectory lines**: Optional display of individual episode reward curves
-- **Subsampling**: Reduce the number of timesteps shown for better performance on long episodes
+- **Four reward distribution plots**: Histograms showing reward distributions at key trajectory points
+- **Two return distribution plots**: Histograms showing return distributions with discount=0.99 and discount=1.0
+- **Comparison boxplots**: Side-by-side comparison of all distributions
+- **Comprehensive statistics**: Mean, standard deviation, min, max for each distribution
 - **Episode filtering**: Filter episodes by minimum length
-- **Statistics**: Comprehensive statistics about episode lengths and rewards
 - **Multiple output formats**: PNG, PDF, SVG support
 
 ## Usage
@@ -27,26 +27,13 @@ python visualize_rewards.py --file <dataset.hdf5> [options]
 - `--num_episodes`: Number of episodes to visualize (0 for all, default: 0)
 - `--output_dir`: Directory to save plots (default: ".")
 - `--format`: Output format - png, pdf, or svg (default: "png")
-- `--subsample`: Subsample timesteps by this factor (default: 1)
-- `--max_timesteps`: Maximum number of timesteps to show (0 for all, default: 0)
-- `--min_episode_length`: Minimum episode length to include (default: 1)
-- `--show_individual`: Show individual trajectory lines in addition to boxplots
+- `--min_episode_length`: Minimum episode length to include (default: 4)
 
 ## Examples
 
 ### Basic Usage
 ```bash
 python visualize_rewards.py --file rollouts.hdf5
-```
-
-### With Subsampling (for long episodes)
-```bash
-python visualize_rewards.py --file rollouts.hdf5 --subsample 5
-```
-
-### Show Individual Trajectories
-```bash
-python visualize_rewards.py --file rollouts.hdf5 --show_individual
 ```
 
 ### Filter Episodes
@@ -61,29 +48,52 @@ python visualize_rewards.py --file rollouts.hdf5 --output_dir ./plots --format p
 
 ## Output
 
-The script generates two plots:
+The script generates four plots:
 
-1. **reward_distribution.{format}**: Main visualization showing:
-   - Boxplots of reward distribution at each timestep
-   - Mean reward line across all episodes
-   - Optional individual trajectory lines
-   - Episode statistics summary
+1. **reward_distributions.{format}**: Four-panel plot showing:
+   - Initial state reward distribution (top-left, blue)
+   - Halfway state reward distribution (top-right, green)
+   - Final state -1 reward distribution (bottom-left, orange)
+   - Final state reward distribution (bottom-right, red)
+   - Each panel includes statistics and mean line
 
-2. **episode_statistics.{format}**: Additional statistics showing:
-   - Episode length distribution histogram
-   - Total reward distribution histogram
+2. **reward_comparison.{format}**: Boxplot comparison showing:
+   - Side-by-side boxplots of all four reward distributions
+   - Easy visual comparison of reward patterns across trajectory points
+
+3. **return_distributions.{format}**: Two-panel plot showing:
+   - Return distribution with discount=0.99 (left, purple)
+   - Return distribution with discount=1.0 (right, teal)
+   - Each panel includes statistics and mean line
+
+4. **return_comparison.{format}**: Boxplot comparison showing:
+   - Side-by-side boxplots of return distributions with different discount factors
+
+## Key Trajectory Points
+
+- **Initial State**: First reward in each episode (index 0)
+- **Halfway State**: Reward at the middle of each episode (index length//2)
+- **Final State -1**: Second-to-last reward in each episode (index length-2)
+- **Final State**: Last reward in each episode (index length-1)
+
+## Return Calculation
+
+Returns are computed using the standard discounted cumulative reward formula:
+- **Return(t) = Σ(k=t to T) γ^(k-t) * reward(k)**
+- **Discount=0.99**: Future rewards are discounted by 0.99
+- **Discount=1.0**: No discounting (sum of all rewards in episode)
 
 ## Requirements
 
 - isaaclab
 - matplotlib
-- seaborn
 - numpy
 - torch
 
 ## Notes
 
-- The script automatically handles episodes of different lengths by padding shorter episodes with NaN values
-- Boxplots only show valid (non-NaN) reward values at each timestep
-- Individual trajectory lines are limited to 10 episodes for readability
-- Statistics are printed to console and displayed on the plots
+- Episodes shorter than `min_episode_length` are excluded
+- Statistics are printed to console and displayed on each plot panel
+- The script automatically handles episodes of different lengths
+- Each distribution is color-coded for easy identification
+- Returns are computed using the initial return value (total discounted return for the episode)

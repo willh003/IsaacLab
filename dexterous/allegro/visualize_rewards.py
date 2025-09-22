@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Script to visualize rewards over trajectories in a dataset with boxplots at each timestep."""
+"""Script to visualize reward distributions at key points in trajectories and return distributions."""
 
 import argparse
 import sys
@@ -7,22 +7,31 @@ import os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-import seaborn as sns
 from collections import defaultdict
 
 
+def compute_returns(rewards, discount=1.0):
+    """Compute discounted returns for a trajectory."""
+    returns = np.zeros_like(rewards)
+    running_return = 0.0
+    
+    # Compute returns backwards
+    for t in reversed(range(len(rewards))):
+        running_return = rewards[t] + discount * running_return
+        returns[t] = running_return
+    
+    return returns
+
+
 def main():
-    """Visualize rewards over trajectories in HDF5 dataset."""
-    parser = argparse.ArgumentParser(description="Visualize rewards over trajectories in HDF5 dataset")
+    """Visualize reward distributions at key trajectory points and return distributions."""
+    parser = argparse.ArgumentParser(description="Visualize reward distributions at key trajectory points and return distributions")
     parser.add_argument("--file", type=str, required=True, help="Path to HDF5 file")
     parser.add_argument("--device", type=str, default="cpu", help="Device to load data on")
     parser.add_argument("--num_episodes", type=int, default=0, help="Number of episodes to visualize (0 for all)")
     parser.add_argument("--output_dir", type=str, default=".", help="Directory to save plots")
     parser.add_argument("--format", type=str, default="png", choices=["png", "pdf", "svg"], help="Output format")
-    parser.add_argument("--subsample", type=int, default=1, help="Subsample timesteps by this factor (1 for no subsampling)")
-    parser.add_argument("--max_timesteps", type=int, default=0, help="Maximum number of timesteps to show (0 for all)")
-    parser.add_argument("--min_episode_length", type=int, default=1, help="Minimum episode length to include")
-    parser.add_argument("--show_individual", action="store_true", help="Show individual trajectory lines in addition to boxplots")
+    parser.add_argument("--min_episode_length", type=int, default=4, help="Minimum episode length to include")
     args = parser.parse_args()
     
     if not os.path.exists(args.file):
@@ -59,10 +68,15 @@ def main():
     # Set up matplotlib style
     plt.rcParams['figure.facecolor'] = 'white'
     plt.rcParams['axes.grid'] = True
-    sns.set_style("whitegrid")
+    plt.rcParams['grid.alpha'] = 0.3
     
-    # Collect all reward data
-    all_rewards = []
+    # Collect reward data at key points and returns
+    initial_rewards = []
+    halfway_rewards = []
+    final_minus_1_rewards = []
+    final_rewards = []
+    returns_discount_99 = []
+    returns_discount_1 = []
     episode_lengths = []
     episode_info = []
     
@@ -90,13 +104,28 @@ def main():
         # Get rewards for this episode
         rewards = rewards_data.cpu().numpy()
         
-        all_rewards.append(rewards)
+        # Extract rewards at key points
+        initial_rewards.append(rewards[0])
+        halfway_rewards.append(rewards[episode_length // 2])
+        final_minus_1_rewards.append(rewards[episode_length - 2])
+        final_rewards.append(rewards[episode_length - 1])
+        
+        # Compute returns
+        returns_99 = compute_returns(rewards, discount=0.99)
+        returns_1 = compute_returns(rewards, discount=1.0)
+        
+        # Store initial returns (total discounted return for the episode)
+        returns_discount_99.append(returns_99[0])
+        returns_discount_1.append(returns_1[0])
+        
         episode_lengths.append(episode_length)
         episode_info.append({
             'name': episode_name,
             'length': episode_length,
             'mean_reward': np.mean(rewards),
-            'total_reward': np.sum(rewards)
+            'total_reward': np.sum(rewards),
+            'return_99': returns_99[0],
+            'return_1': returns_1[0]
         })
     
     handler.close()
@@ -109,167 +138,274 @@ def main():
     else:
         print(f"All episodes are longer than min_episode_length={args.min_episode_length}")
         
-    if not all_rewards:
+    if not initial_rewards:
         print("No valid episodes found for visualization")
         return
     
-    # Find the maximum episode length
-    max_length = max(episode_lengths)
-    if args.max_timesteps > 0:
-        max_length = min(max_length, args.max_timesteps)
+    # Convert to numpy arrays
+    initial_rewards = np.array(initial_rewards)
+    halfway_rewards = np.array(halfway_rewards)
+    final_minus_1_rewards = np.array(final_minus_1_rewards)
+    final_rewards = np.array(final_rewards)
+    returns_discount_99 = np.array(returns_discount_99)
+    returns_discount_1 = np.array(returns_discount_1)
     
-    print(f"Maximum episode length: {max_length}")
+    print(f"Processed {len(initial_rewards)} episodes")
     print(f"Episode length statistics:")
     print(f"  Mean: {np.mean(episode_lengths):.1f}")
     print(f"  Median: {np.median(episode_lengths):.1f}")
     print(f"  Min: {min(episode_lengths)}")
     print(f"  Max: {max(episode_lengths)}")
     
-    # Prepare data for boxplot visualization
-    # Pad shorter episodes with NaN values
-    padded_rewards = []
-    for rewards in all_rewards:
-        if len(rewards) < max_length:
-            padded = np.full(max_length, np.nan)
-            padded[:len(rewards)] = rewards
-            padded_rewards.append(padded)
-        else:
-            padded_rewards.append(rewards[:max_length])
+    # Create the four distribution plots
+    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+    fig.suptitle('Reward Distributions at Key Trajectory Points', fontsize=16)
     
-    padded_rewards = np.array(padded_rewards)  # Shape: (num_episodes, max_length)
-    
-    # Apply subsampling
-    if args.subsample > 1:
-        timesteps = np.arange(0, max_length, args.subsample)
-        padded_rewards = padded_rewards[:, timesteps]
-    else:
-        timesteps = np.arange(max_length)
-    
-    print(f"Visualizing {len(timesteps)} timesteps (subsampled by {args.subsample})")
-    
-    # Create the main visualization
-    fig, ax = plt.subplots(figsize=(15, 8))
-    
-    # Create boxplot data
-    boxplot_data = []
-    boxplot_positions = []
-    
-    for t_idx, timestep in enumerate(timesteps):
-        # Get rewards at this timestep (excluding NaN values)
-        rewards_at_t = padded_rewards[:, t_idx]
-        valid_rewards = rewards_at_t[~np.isnan(rewards_at_t)]
-        
-        if len(valid_rewards) > 0:
-            boxplot_data.append(valid_rewards)
-            boxplot_positions.append(timestep)
-    
-    # Create boxplot
-    if boxplot_data:
-        bp = ax.boxplot(boxplot_data, positions=boxplot_positions, widths=0.8, patch_artist=True)
-        
-        # Style the boxplot
-        for patch in bp['boxes']:
-            patch.set_facecolor('lightblue')
-            patch.set_alpha(0.7)
-        
-        for whisker in bp['whiskers']:
-            whisker.set_color('black')
-            whisker.set_linewidth(1)
-        
-        for cap in bp['caps']:
-            cap.set_color('black')
-            cap.set_linewidth(1)
-        
-        for median in bp['medians']:
-            median.set_color('red')
-            median.set_linewidth(2)
-        
-        for flier in bp['fliers']:
-            flier.set_marker('o')
-            flier.set_markerfacecolor('red')
-            flier.set_markeredgecolor('red')
-            flier.set_markersize(3)
-            flier.set_alpha(0.6)
-    
-    # Add individual trajectory lines if requested
-    if args.show_individual:
-        colors = plt.cm.tab10(np.linspace(0, 1, min(len(all_rewards), 10)))
-        for i, rewards in enumerate(all_rewards):
-            if len(rewards) <= max_length:
-                episode_timesteps = np.arange(len(rewards))
-                if args.subsample > 1:
-                    episode_timesteps = episode_timesteps[::args.subsample]
-                    episode_rewards = rewards[::args.subsample]
-                else:
-                    episode_rewards = rewards
-                
-                ax.plot(episode_timesteps, episode_rewards, 
-                       color=colors[i % len(colors)], alpha=0.3, linewidth=0.5)
-    
-    # Add mean line
-    mean_rewards = np.nanmean(padded_rewards, axis=0)
-    if args.subsample > 1:
-        mean_rewards = mean_rewards[::args.subsample]
-    ax.plot(timesteps, mean_rewards, color='red', linewidth=2, label='Mean Reward')
-    
-    # Styling
-    ax.set_xlabel('Timestep')
-    ax.set_ylabel('Reward')
-    ax.set_title(f'Reward Distribution Over Time\n({len(all_rewards)} episodes, subsampled by {args.subsample})')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    
-    # Set x-axis limits
-    ax.set_xlim(-0.5, max(timesteps) + 0.5)
+    # Plot 1: Initial state rewards
+    ax1 = axes[0, 0]
+    ax1.hist(initial_rewards, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
+    ax1.set_xlabel('Reward')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title('Initial State Rewards')
+    ax1.grid(True, alpha=0.3)
+    ax1.axvline(np.mean(initial_rewards), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(initial_rewards):.3f}')
+    ax1.legend()
     
     # Add statistics text
-    stats_text = f'Episodes: {len(all_rewards)}\n'
-    stats_text += f'Mean episode length: {np.mean(episode_lengths):.1f}\n'
-    stats_text += f'Mean total reward: {np.mean([info["total_reward"] for info in episode_info]):.2f}\n'
-    stats_text += f'Mean reward per step: {np.mean([info["mean_reward"] for info in episode_info]):.3f}'
+    stats_text = f'Count: {len(initial_rewards)}\n'
+    stats_text += f'Mean: {np.mean(initial_rewards):.3f}\n'
+    stats_text += f'Std: {np.std(initial_rewards):.3f}\n'
+    stats_text += f'Min: {np.min(initial_rewards):.3f}\n'
+    stats_text += f'Max: {np.max(initial_rewards):.3f}'
+    ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, 
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     
-    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+    # Plot 2: Halfway state rewards
+    ax2 = axes[0, 1]
+    ax2.hist(halfway_rewards, bins=20, alpha=0.7, color='lightgreen', edgecolor='black')
+    ax2.set_xlabel('Reward')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Halfway State Rewards')
+    ax2.grid(True, alpha=0.3)
+    ax2.axvline(np.mean(halfway_rewards), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(halfway_rewards):.3f}')
+    ax2.legend()
+    
+    # Add statistics text
+    stats_text = f'Count: {len(halfway_rewards)}\n'
+    stats_text += f'Mean: {np.mean(halfway_rewards):.3f}\n'
+    stats_text += f'Std: {np.std(halfway_rewards):.3f}\n'
+    stats_text += f'Min: {np.min(halfway_rewards):.3f}\n'
+    stats_text += f'Max: {np.max(halfway_rewards):.3f}'
+    ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes, 
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    # Plot 3: Final state -1 rewards
+    ax3 = axes[1, 0]
+    ax3.hist(final_minus_1_rewards, bins=20, alpha=0.7, color='orange', edgecolor='black')
+    ax3.set_xlabel('Reward')
+    ax3.set_ylabel('Frequency')
+    ax3.set_title('Final State -1 Rewards')
+    ax3.grid(True, alpha=0.3)
+    ax3.axvline(np.mean(final_minus_1_rewards), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(final_minus_1_rewards):.3f}')
+    ax3.legend()
+    
+    # Add statistics text
+    stats_text = f'Count: {len(final_minus_1_rewards)}\n'
+    stats_text += f'Mean: {np.mean(final_minus_1_rewards):.3f}\n'
+    stats_text += f'Std: {np.std(final_minus_1_rewards):.3f}\n'
+    stats_text += f'Min: {np.min(final_minus_1_rewards):.3f}\n'
+    stats_text += f'Max: {np.max(final_minus_1_rewards):.3f}'
+    ax3.text(0.02, 0.98, stats_text, transform=ax3.transAxes, 
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    # Plot 4: Final state rewards
+    ax4 = axes[1, 1]
+    ax4.hist(final_rewards, bins=20, alpha=0.7, color='lightcoral', edgecolor='black')
+    ax4.set_xlabel('Reward')
+    ax4.set_ylabel('Frequency')
+    ax4.set_title('Final State Rewards')
+    ax4.grid(True, alpha=0.3)
+    ax4.axvline(np.mean(final_rewards), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(final_rewards):.3f}')
+    ax4.legend()
+    
+    # Add statistics text
+    stats_text = f'Count: {len(final_rewards)}\n'
+    stats_text += f'Mean: {np.mean(final_rewards):.3f}\n'
+    stats_text += f'Std: {np.std(final_rewards):.3f}\n'
+    stats_text += f'Min: {np.min(final_rewards):.3f}\n'
+    stats_text += f'Max: {np.max(final_rewards):.3f}'
+    ax4.text(0.02, 0.98, stats_text, transform=ax4.transAxes, 
             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     
     plt.tight_layout()
     
     # Save the plot
-    output_file = os.path.join(args.output_dir, f'reward_distribution.{args.format}')
+    output_file = os.path.join(args.output_dir, f'reward_distributions.{args.format}')
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"Saved plot to: {output_file}")
     
-    # Create a second plot showing episode statistics
-    fig2, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    # Create a comparison boxplot for rewards
+    fig2, ax = plt.subplots(figsize=(12, 8))
     
-    # Episode length distribution
-    ax1.hist(episode_lengths, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
-    ax1.set_xlabel('Episode Length')
-    ax1.set_ylabel('Number of Episodes')
-    ax1.set_title('Episode Length Distribution')
-    ax1.grid(True, alpha=0.3)
+    # Prepare data for boxplot
+    boxplot_data = [initial_rewards, halfway_rewards, final_minus_1_rewards, final_rewards]
+    boxplot_labels = ['Initial', 'Halfway', 'Final-1', 'Final']
     
-    # Total reward distribution
-    total_rewards = [info["total_reward"] for info in episode_info]
-    ax2.hist(total_rewards, bins=20, alpha=0.7, color='lightgreen', edgecolor='black')
-    ax2.set_xlabel('Total Episode Reward')
-    ax2.set_ylabel('Number of Episodes')
-    ax2.set_title('Total Reward Distribution')
-    ax2.grid(True, alpha=0.3)
+    bp = ax.boxplot(boxplot_data, labels=boxplot_labels, patch_artist=True)
+    
+    # Style the boxplot
+    colors = ['skyblue', 'lightgreen', 'orange', 'lightcoral']
+    for patch, color in zip(bp['boxes'], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+    
+    for whisker in bp['whiskers']:
+        whisker.set_color('black')
+        whisker.set_linewidth(1)
+    
+    for cap in bp['caps']:
+        cap.set_color('black')
+        cap.set_linewidth(1)
+    
+    for median in bp['medians']:
+        median.set_color('red')
+        median.set_linewidth(2)
+    
+    for flier in bp['fliers']:
+        flier.set_marker('o')
+        flier.set_markerfacecolor('red')
+        flier.set_markeredgecolor('red')
+        flier.set_markersize(3)
+        flier.set_alpha(0.6)
+    
+    ax.set_ylabel('Reward')
+    ax.set_title('Reward Distribution Comparison Across Trajectory Points')
+    ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
     
-    # Save the statistics plot
-    stats_output_file = os.path.join(args.output_dir, f'episode_statistics.{args.format}')
-    plt.savefig(stats_output_file, dpi=300, bbox_inches='tight')
-    print(f"Saved statistics plot to: {stats_output_file}")
+    # Save the comparison plot
+    comparison_output_file = os.path.join(args.output_dir, f'reward_comparison.{args.format}')
+    plt.savefig(comparison_output_file, dpi=300, bbox_inches='tight')
+    print(f"Saved comparison plot to: {comparison_output_file}")
+    
+    # Create return distribution plots
+    fig3, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    fig3.suptitle('Return Distributions', fontsize=16)
+    
+    # Plot 1: Returns with discount=0.99
+    ax1.hist(returns_discount_99, bins=20, alpha=0.7, color='purple', edgecolor='black')
+    ax1.set_xlabel('Return')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title('Returns (Discount=0.99)')
+    ax1.grid(True, alpha=0.3)
+    ax1.axvline(np.mean(returns_discount_99), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(returns_discount_99):.3f}')
+    ax1.legend()
+    
+    # Add statistics text
+    stats_text = f'Count: {len(returns_discount_99)}\n'
+    stats_text += f'Mean: {np.mean(returns_discount_99):.3f}\n'
+    stats_text += f'Std: {np.std(returns_discount_99):.3f}\n'
+    stats_text += f'Min: {np.min(returns_discount_99):.3f}\n'
+    stats_text += f'Max: {np.max(returns_discount_99):.3f}'
+    ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, 
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    # Plot 2: Returns with discount=1.0
+    ax2.hist(returns_discount_1, bins=20, alpha=0.7, color='teal', edgecolor='black')
+    ax2.set_xlabel('Return')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Returns (Discount=1.0)')
+    ax2.grid(True, alpha=0.3)
+    ax2.axvline(np.mean(returns_discount_1), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(returns_discount_1):.3f}')
+    ax2.legend()
+    
+    # Add statistics text
+    stats_text = f'Count: {len(returns_discount_1)}\n'
+    stats_text += f'Mean: {np.mean(returns_discount_1):.3f}\n'
+    stats_text += f'Std: {np.std(returns_discount_1):.3f}\n'
+    stats_text += f'Min: {np.min(returns_discount_1):.3f}\n'
+    stats_text += f'Max: {np.max(returns_discount_1):.3f}'
+    ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes, 
+            verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+    
+    plt.tight_layout()
+    
+    # Save the return distribution plot
+    returns_output_file = os.path.join(args.output_dir, f'return_distributions.{args.format}')
+    plt.savefig(returns_output_file, dpi=300, bbox_inches='tight')
+    print(f"Saved return distributions plot to: {returns_output_file}")
+    
+    # Create return comparison boxplot
+    fig4, ax = plt.subplots(figsize=(10, 6))
+    
+    # Prepare data for return boxplot
+    return_boxplot_data = [returns_discount_99, returns_discount_1]
+    return_boxplot_labels = ['Discount=0.99', 'Discount=1.0']
+    
+    bp = ax.boxplot(return_boxplot_data, labels=return_boxplot_labels, patch_artist=True)
+    
+    # Style the boxplot
+    return_colors = ['purple', 'teal']
+    for patch, color in zip(bp['boxes'], return_colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+    
+    for whisker in bp['whiskers']:
+        whisker.set_color('black')
+        whisker.set_linewidth(1)
+    
+    for cap in bp['caps']:
+        cap.set_color('black')
+        cap.set_linewidth(1)
+    
+    for median in bp['medians']:
+        median.set_color('red')
+        median.set_linewidth(2)
+    
+    for flier in bp['fliers']:
+        flier.set_marker('o')
+        flier.set_markerfacecolor('red')
+        flier.set_markeredgecolor('red')
+        flier.set_markersize(3)
+        flier.set_alpha(0.6)
+    
+    ax.set_ylabel('Return')
+    ax.set_title('Return Distribution Comparison')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save the return comparison plot
+    return_comparison_output_file = os.path.join(args.output_dir, f'return_comparison.{args.format}')
+    plt.savefig(return_comparison_output_file, dpi=300, bbox_inches='tight')
+    print(f"Saved return comparison plot to: {return_comparison_output_file}")
     
     # Print summary statistics
     print(f"\nSummary Statistics:")
-    print(f"  Total episodes processed: {len(all_rewards)}")
+    print(f"  Total episodes processed: {len(initial_rewards)}")
     print(f"  Episodes excluded (too short): {len(short_episodes)}")
-    print(f"  Mean episode length: {np.mean(episode_lengths):.1f} ± {np.std(episode_lengths):.1f}")
-    print(f"  Mean total reward: {np.mean(total_rewards):.2f} ± {np.std(total_rewards):.2f}")
-    print(f"  Mean reward per step: {np.mean([info['mean_reward'] for info in episode_info]):.3f} ± {np.std([info['mean_reward'] for info in episode_info]):.3f}")
+    print(f"\nReward Statistics by Trajectory Point:")
+    print(f"  Initial State:")
+    print(f"    Mean: {np.mean(initial_rewards):.3f} ± {np.std(initial_rewards):.3f}")
+    print(f"    Min: {np.min(initial_rewards):.3f}, Max: {np.max(initial_rewards):.3f}")
+    print(f"  Halfway State:")
+    print(f"    Mean: {np.mean(halfway_rewards):.3f} ± {np.std(halfway_rewards):.3f}")
+    print(f"    Min: {np.min(halfway_rewards):.3f}, Max: {np.max(halfway_rewards):.3f}")
+    print(f"  Final-1 State:")
+    print(f"    Mean: {np.mean(final_minus_1_rewards):.3f} ± {np.std(final_minus_1_rewards):.3f}")
+    print(f"    Min: {np.min(final_minus_1_rewards):.3f}, Max: {np.max(final_minus_1_rewards):.3f}")
+    print(f"  Final State:")
+    print(f"    Mean: {np.mean(final_rewards):.3f} ± {np.std(final_rewards):.3f}")
+    print(f"    Min: {np.min(final_rewards):.3f}, Max: {np.max(final_rewards):.3f}")
+    
+    print(f"\nReturn Statistics:")
+    print(f"  Discount=0.99:")
+    print(f"    Mean: {np.mean(returns_discount_99):.3f} ± {np.std(returns_discount_99):.3f}")
+    print(f"    Min: {np.min(returns_discount_99):.3f}, Max: {np.max(returns_discount_99):.3f}")
+    print(f"  Discount=1.0:")
+    print(f"    Mean: {np.mean(returns_discount_1):.3f} ± {np.std(returns_discount_1):.3f}")
+    print(f"    Min: {np.min(returns_discount_1):.3f}, Max: {np.max(returns_discount_1):.3f}")
     
     plt.show()
 

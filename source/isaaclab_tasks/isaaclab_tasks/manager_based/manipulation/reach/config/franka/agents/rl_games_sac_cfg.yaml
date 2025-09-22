@@ -2,19 +2,22 @@ params:
   seed: 42
 
   # environment wrapper clipping
+
   env:
-    clip_observations: 5.0
+    clip_observations: 100.0
     clip_actions: 1.0
 
-  algo:
-    name: sac_utd
+  algo: 
+    name: sac
 
   model:
     name: soft_actor_critic
 
   network:
-    name: soft_actor_critic
+    name: sac_critic_layernorm
     separate: True
+    critic_normalization: layer_norm
+    actor_normalization: null
 
     space:
       continuous:
@@ -28,7 +31,7 @@ params:
         fixed_sigma: True
 
     mlp:
-      units: [512, 256, 128]
+      units: [64,64]
       activation: relu
       d2rl: False
 
@@ -49,25 +52,22 @@ params:
     reward_shaper:
       scale_value: 1.0
     max_epochs: 50000
-    num_steps_per_episode: 8
+    num_steps_per_episode: 50
     save_best_after: 100
     save_frequency: 1000
     gamma: 0.99
-    init_alpha: 1.0
+    init_alpha: 0.2 # 1.0
     alpha_lr: 0.005
-    actor_lr: 0.0005
-    critic_lr: 0.0005
+    actor_lr: 0.001 # 0.0005
+    critic_lr: 0.001 # 0.0005
     critic_tau: 0.005
     batch_size: 4096
-    target_entropy_coef: 1.0
+    target_entropy_coef: 0.1 # 1.0
     learnable_temperature: true
     num_seed_steps: 5
-    num_warmup_steps: 10
+    num_warmup_steps: 0
     replay_buffer_size: 1000000
     num_actors: -1  # configured from the script (based on num_envs)
-    
-    # UTD (Update-to-Data) ratio configuration
-    utd_ratio: 1.0  # Can be < 1.0 (e.g., 0.5) or > 1.0 (e.g., 2.0, 4.0)
 
     player:
       #render: True

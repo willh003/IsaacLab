@@ -5,6 +5,7 @@ import random
 from copy import deepcopy
 import torch
 import h5py
+import pandas as pd
 from rl_games.common import object_factory
 from rl_games.common import tr_helpers
 
@@ -13,6 +14,26 @@ from rl_games.algos_torch import a2c_discrete
 from rl_games.algos_torch import players
 from rl_games.common.algo_observer import DefaultAlgoObserver
 from rl_games.algos_torch import sac_agent
+from rl_games.algos_torch import network_builder
+from rl_games.algos_torch import model_builder
+import torch.nn as nn
+import torch
+
+def normalize_actions_to_policy_range(actions, action_mins, action_maxs):
+    """Normalize actions from actual joint ranges to [-1, 1] for SAC policy.
+    
+    Args:
+        actions: numpy array of actions in actual joint ranges
+        action_mins: minimum values for each action dimension
+        action_maxs: maximum values for each action dimension
+        
+    Returns:
+        numpy array of normalized actions in [-1, 1]
+    """
+    # Scale from [action_mins, action_maxs] to [-1, 1]
+    # Formula: normalized = 2 * (actions - min) / (max - min) - 1
+    normalized_actions = 2.0 * (actions - action_mins) / (action_maxs - action_mins) - 1.0
+    return normalized_actions
 
 def load_dataset_transitions(dataset_path, env_obs_shape, env_action_shape, device):
     """Load transitions from HDF5 dataset and convert to format suitable for replay buffer.
@@ -32,6 +53,46 @@ def load_dataset_transitions(dataset_path, env_obs_shape, env_action_shape, devi
         data_group = f['data']
         demo_keys = list(data_group.keys())
         
+        # First pass: collect all actions to find global min/max
+        print("First pass: collecting all actions to find min/max...")
+        all_actions_list = []
+        
+        for demo_key in demo_keys:
+            demo = data_group[demo_key]
+            actions = demo['actions'][:]  # (T, action_dim)
+            all_actions_list.append(actions)
+        
+        # Concatenate all actions and find global min/max
+        all_actions_array = np.concatenate(all_actions_list, axis=0)
+        action_mins = np.min(all_actions_array, axis=0)
+        action_maxs = np.max(all_actions_array, axis=0)
+        
+        print(f"Found action ranges:")
+        for i in range(len(action_mins)):
+            print(f"  Joint {i+1}: [{action_mins[i]:.3f}, {action_maxs[i]:.3f}]")
+        print("Will normalize dataset actions from actual ranges to [-1, 1]")
+        
+        # Also collect all observations to check if normalization is needed
+        print("Collecting all observations to check scaling...")
+        all_observations_list = []
+        
+        for demo_key in demo_keys:
+            demo = data_group[demo_key]
+            # Reconstruct observations same way as in second pass
+            obs_components = []
+            obs_keys = list(demo['obs'].keys())
+            obs_keys.sort()
+            
+            for obs_key in obs_keys:
+                obs_data = demo['obs'][obs_key][:]
+                obs_components.append(obs_data)
+            
+            observations = np.concatenate(obs_components, axis=1)
+            all_observations_list.append(observations)
+        
+        all_observations_array = np.concatenate(all_observations_list, axis=0)
+
+        # Second pass: load transitions with normalized actions
         all_transitions = []
         total_transitions = 0
         
@@ -62,6 +123,9 @@ def load_dataset_transitions(dataset_path, env_obs_shape, env_action_shape, devi
                 action = actions[t]
                 next_obs = observations[t + 1]
                 
+                # Normalize action from actual range to [-1, 1]
+                normalized_action = normalize_actions_to_policy_range(action, action_mins, action_maxs)
+                
                 # Simple reward structure: 0 for all transitions except potentially the last
                 # You can modify this based on your reward structure
                 reward = rewards[t]
@@ -69,7 +133,7 @@ def load_dataset_transitions(dataset_path, env_obs_shape, env_action_shape, devi
                 # Done is True only at episode end
                 done = (t == episode_length - 2)
                 
-                all_transitions.append((obs, action, reward, next_obs, done))
+                all_transitions.append((obs, normalized_action, reward, next_obs, done))
                 total_transitions += 1
         
         print(f"Loaded {total_transitions} transitions from {len(demo_keys)} demos")
@@ -85,7 +149,7 @@ def load_dataset_transitions(dataset_path, env_obs_shape, env_action_shape, devi
             
             processed_transitions.append((obs_tensor, action_tensor, reward_tensor, next_obs_tensor, done_tensor))
         
-        return processed_transitions
+        return processed_transitions, action_mins, action_maxs
 
 class MixedDatasetSampler:
     """Sampler that mixes offline dataset and online replay buffer with equal probability."""
@@ -125,7 +189,7 @@ class MixedDatasetSampler:
         
         print(f"[INFO] Mixed dataset sampler initialized with {self.dataset_size} dataset transitions")
     
-    def sample(self, batch_size):
+    def sample(self, batch_size, offline_ratio=.5):
         """Sample batch with 50% from dataset and 50% from replay buffer.
         
         Args:
@@ -135,7 +199,7 @@ class MixedDatasetSampler:
             Tuple of (obs, action, reward, next_obs, done) tensors
         """
         # Split batch size between dataset and replay buffer
-        dataset_batch_size = batch_size // 2
+        dataset_batch_size = int(batch_size * offline_ratio)
         replay_batch_size = batch_size - dataset_batch_size
         
         # Vectorized sampling from dataset (always available)
@@ -148,8 +212,8 @@ class MixedDatasetSampler:
         
         # Sample from replay buffer (if it has enough data)
         replay_obs, replay_actions, replay_rewards, replay_next_obs, replay_dones = self.original_sample(replay_batch_size)
-
         
+
         # Combine batches (vectorized concatenation)
         combined_obs = torch.cat([dataset_obs, replay_obs], dim=0)
         combined_actions = torch.cat([dataset_actions, replay_actions], dim=0)
@@ -166,6 +230,138 @@ class MixedDatasetSampler:
         combined_dones = combined_dones[indices]
         
         return combined_obs, combined_actions, combined_rewards, combined_next_obs, combined_dones
+
+
+class SACCriticLayerNormBuilder(network_builder.SACBuilder):
+    """Custom SAC builder that applies layernorm only to critic networks, not actor."""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    def load(self, params):
+        # Call parent load first
+        super().load(params)
+        return self
+    
+    class Network(network_builder.SACBuilder.Network):
+        """Custom network that allows separate normalization for actor and critic."""
+        
+        def __init__(self, params, **kwargs):
+            # Don't call the parent __init__ yet, we need to modify it
+            network_builder.NetworkBuilder.BaseNetwork.__init__(self)
+            self.load(params)
+            
+            actions_num = kwargs.pop('actions_num')
+            input_shape = kwargs.pop('input_shape')
+            obs_dim = kwargs.pop('obs_dim')
+            action_dim = kwargs.pop('action_dim')
+            self.num_seqs = kwargs.pop('num_seqs', 1)
+
+            # Actor network - NO layernorm
+            actor_mlp_args = {
+                'input_size': obs_dim,
+                'units': self.units,
+                'activation': self.activation,
+                'norm_func_name': None,  # No layernorm for actor
+                'dense_func': torch.nn.Linear,
+                'd2rl': self.is_d2rl,
+                'norm_only_first_layer': self.norm_only_first_layer
+            }
+            
+            # Critic network - WITH layernorm
+            critic_mlp_args = {
+                'input_size': obs_dim + action_dim,
+                'units': self.units,
+                'activation': self.activation,
+                'norm_func_name': 'layer_norm',  # Apply layernorm to critic
+                'dense_func': torch.nn.Linear,
+                'd2rl': self.is_d2rl,
+                'norm_only_first_layer': self.norm_only_first_layer
+            }
+            
+            print("Building Custom Actor (no layernorm)")
+            print(actor_mlp_args)
+            self.actor = self._build_actor(2*action_dim, self.log_std_bounds, **actor_mlp_args)
+            
+            if self.separate:
+                print("Building Custom Critic with LayerNorm")
+                print(critic_mlp_args)
+                self.critic = self._build_critic_with_layernorm(1, **critic_mlp_args)
+                print("Building Custom Critic Target with LayerNorm")
+                self.critic_target = self._build_critic_with_layernorm(1, **critic_mlp_args)
+                self.critic_target.load_state_dict(self.critic.state_dict())
+            
+            # Initialize weights
+            mlp_init = self.init_factory.create(**self.initializer)
+            for m in self.modules():
+                if isinstance(m, nn.Linear):
+                    mlp_init(m.weight)
+                    if getattr(m, "bias", None) is not None:
+                        torch.nn.init.zeros_(m.bias)
+        
+        def _build_mlp_with_layernorm(self, input_size, units, activation, dense_func, 
+                                    norm_only_first_layer=False, norm_func_name=None, d2rl=False):
+            """Build MLP with proper layernorm support."""
+            if d2rl:
+                from rl_games.algos_torch.d2rl import D2RLNet
+                return D2RLNet(input_size, units, activation, norm_func_name)
+            else:
+                # Use the fixed sequential MLP builder
+                in_size = input_size
+                layers = []
+                need_norm = True
+                
+                for unit in units:
+                    layers.append(dense_func(in_size, unit))
+                    layers.append(self.activations_factory.create(activation))
+                    
+                    if not need_norm:
+                        continue
+                    if norm_only_first_layer and norm_func_name is not None:
+                        need_norm = False 
+                    if norm_func_name == 'layer_norm':
+                        layers.append(torch.nn.LayerNorm(unit))
+                        print(f"Added LayerNorm({unit})")
+                    elif norm_func_name == 'batch_norm':
+                        layers.append(torch.nn.BatchNorm1d(unit))
+                    in_size = unit
+                
+                return nn.Sequential(*layers)
+        
+        def _build_critic_with_layernorm(self, output_dim, **mlp_args):
+            """Build critic using the layernorm-enabled MLP method."""
+            q1_mlp = self._build_mlp_with_layernorm(**mlp_args)
+            q1_out = torch.nn.Linear(mlp_args['units'][-1], output_dim)
+            
+            q2_mlp = self._build_mlp_with_layernorm(**mlp_args)
+            q2_out = torch.nn.Linear(mlp_args['units'][-1], output_dim)
+            
+            # Create the DoubleQCritic with our layernorm MLPs
+            class DoubleQCriticLayerNorm(nn.Module):
+                def __init__(self, q1_mlp, q1_out, q2_mlp, q2_out):
+                    super().__init__()
+                    self.q1_mlp = q1_mlp
+                    self.q1_out = q1_out  
+                    self.q2_mlp = q2_mlp
+                    self.q2_out = q2_out
+                
+                def forward(self, obs, action):
+                    obs_action = torch.cat([obs, action], dim=-1)
+                    
+                    q1_features = self.q1_mlp(obs_action)
+                    q1 = self.q1_out(q1_features)
+                    
+                    q2_features = self.q2_mlp(obs_action)
+                    q2 = self.q2_out(q2_features)
+                    
+                    return q1, q2
+            
+            return DoubleQCriticLayerNorm(q1_mlp, q1_out, q2_mlp, q2_out)
+    
+    def build(self, name, **kwargs):
+        """Build the custom network."""
+        net = SACCriticLayerNormBuilder.Network(self.params, **kwargs)
+        return net
 
 
 def _restore(agent, args):
@@ -196,7 +392,10 @@ class Runner:
         self.player_factory.register_builder('a2c_discrete', lambda **kwargs : players.PpoPlayerDiscrete(**kwargs))
         self.player_factory.register_builder('sac', lambda **kwargs : players.SACPlayer(**kwargs))
         #self.player_factory.register_builder('dqn', lambda **kwargs : players.DQNPlayer(**kwargs))
-
+        
+        # Register custom network builder
+        model_builder.register_network('sac_critic_layernorm', SACCriticLayerNormBuilder)
+        
         self.algo_observer = algo_observer if algo_observer else DefaultAlgoObserver()
         torch.backends.cudnn.benchmark = True
         ### it didnot help for lots for openai gym envs anyway :(

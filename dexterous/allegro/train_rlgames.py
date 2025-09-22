@@ -28,8 +28,9 @@ parser.add_argument(
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--sigma", type=str, default=None, help="The policy's initial standard deviation.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
-parser.add_argument("--config_name", type=str, default="rl_games_sac_cfg_entry_point", help="Name of the config entry point to use.")
+parser.add_argument("--config_name", type=str, default="rl_games_sac_rlpd_cfg_entry_point", help="Name of the config entry point to use.")
 parser.add_argument("--dataset", type=str, default=None, help="Path to HDF5 dataset for replay buffer initialization.")
+parser.add_argument("--wandb", type=str, default="online", help="Name of the wandb run.")
 
 
 # append AppLauncher cli args
@@ -56,7 +57,77 @@ import random
 from datetime import datetime
 
 from rl_games.common import env_configurations, vecenv
-from rl_games.common.algo_observer import IsaacAlgoObserver
+from rl_games.common.algo_observer import AlgoObserver, IsaacAlgoObserver
+from rl_games.algos_torch.model_builder import register_model, register_network
+
+
+class WandbAlgoObserver(AlgoObserver):
+    """Log statistics from the environment along with the algorithm running stats to wandb."""
+
+    def __init__(self):
+        pass
+
+    def after_init(self, algo):
+        self.algo = algo
+        from rl_games.algos_torch import torch_ext
+        self.mean_scores = torch_ext.AverageMeter(1, self.algo.games_to_track).to(self.algo.ppo_device)
+        self.ep_infos = []
+        self.direct_info = {}
+        self.writer = self.algo.writer
+
+    def process_infos(self, infos, done_indices):
+        if not isinstance(infos, dict):
+            classname = self.__class__.__name__
+            raise ValueError(f"{classname} expected 'infos' as dict. Received: {type(infos)}")
+        # store episode information
+        if "episode" in infos:
+            self.ep_infos.append(infos["episode"])
+        # log other variables directly
+        if len(infos) > 0 and isinstance(infos, dict):  # allow direct logging from env
+            self.direct_info = {}
+            for k, v in infos.items():
+                # only log scalars
+                if isinstance(v, float) or isinstance(v, int) or (isinstance(v, torch.Tensor) and len(v.shape) == 0):
+                    self.direct_info[k] = v
+
+    def after_clear_stats(self):
+        # clear stored buffers
+        self.mean_scores.clear()
+
+    def after_print_stats(self, frame, epoch_num, total_time):
+        import wandb
+        # log scalars from the episode
+        if self.ep_infos:
+            for key in self.ep_infos[0]:
+                info_tensor = torch.tensor([], device=self.algo.device)
+                for ep_info in self.ep_infos:
+                    # handle scalar and zero dimensional tensor infos
+                    if not isinstance(ep_info[key], torch.Tensor):
+                        ep_info[key] = torch.Tensor([ep_info[key]])
+                    if len(ep_info[key].shape) == 0:
+                        ep_info[key] = ep_info[key].unsqueeze(0)
+                    info_tensor = torch.cat((info_tensor, ep_info[key].to(self.algo.device)))
+                value = torch.mean(info_tensor)
+                wandb.log({f"Episode/{key}": value}, step=epoch_num)
+                self.writer.add_scalar("Episode/" + key, value, epoch_num)
+            self.ep_infos.clear()
+        # log scalars from env information
+        for k, v in self.direct_info.items():
+            wandb.log({f"{k}/frame": v}, step=frame)
+            wandb.log({f"{k}/iter": v}, step=epoch_num)
+            wandb.log({f"{k}/time": v}, step=total_time)
+            self.writer.add_scalar(f"{k}/frame", v, frame)
+            self.writer.add_scalar(f"{k}/iter", v, epoch_num)
+            self.writer.add_scalar(f"{k}/time", v, total_time)
+        # log mean reward/score from the env
+        if self.mean_scores.current_size > 0:
+            mean_scores = self.mean_scores.get_mean()
+            wandb.log({"scores/mean": mean_scores}, step=frame)
+            wandb.log({"scores/iter": mean_scores}, step=epoch_num)
+            wandb.log({"scores/time": mean_scores}, step=total_time)
+            self.writer.add_scalar("scores/mean", mean_scores, frame)
+            self.writer.add_scalar("scores/iter", mean_scores, epoch_num)
+            self.writer.add_scalar("scores/time", mean_scores, total_time)
 
 
 from isaaclab.envs import (
@@ -77,9 +148,8 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-import allegro.sac_her as sac_her
 import allegro.sac_utd as sac_utd
-from allegro.rl_games_utils import load_dataset_transitions, MixedDatasetSampler, Runner
+from allegro.rl_games_utils import load_dataset_transitions, MixedDatasetSampler, Runner, SACCriticLayerNormBuilder
 import h5py
 import numpy as np
 
@@ -202,53 +272,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "clip_actions": agent_cfg["params"]["env"]["clip_actions"],
         "normalize_input": agent_cfg["params"]["config"]["normalize_input"],
         "reward_shaper_scale": agent_cfg["params"]["config"]["reward_shaper"]["scale_value"],
-        
-        # Training parameters
-        "max_epochs": agent_cfg["params"]["config"]["max_epochs"],
-        "num_steps_per_episode": agent_cfg["params"]["config"]["num_steps_per_episode"],
-        "batch_size": agent_cfg["params"]["config"]["batch_size"],
-        "save_frequency": agent_cfg["params"]["config"]["save_frequency"],
-        "save_best_after": agent_cfg["params"]["config"]["save_best_after"],
-        
-        # Learning rates
-        "learning_rate": {
-            "actor": agent_cfg["params"]["config"]["actor_lr"],
-            "critic": agent_cfg["params"]["config"]["critic_lr"],
-            "alpha": agent_cfg["params"]["config"]["alpha_lr"],
-        },
-        
-        # SAC-specific parameters
-        "gamma": agent_cfg["params"]["config"]["gamma"],
-        "init_alpha": agent_cfg["params"]["config"]["init_alpha"],
-        "critic_tau": agent_cfg["params"]["config"]["critic_tau"],
-        "target_entropy_coef": agent_cfg["params"]["config"]["target_entropy_coef"],
-        "learnable_temperature": agent_cfg["params"]["config"]["learnable_temperature"],
-        
-        # Experience replay
-        "replay_buffer_size": agent_cfg["params"]["config"]["replay_buffer_size"],
-        "num_warmup_steps": agent_cfg["params"]["config"]["num_warmup_steps"],
-        "num_seed_steps": agent_cfg["params"]["config"]["num_seed_steps"],
-        
-        # Network architecture
-        "network": {
-            "mlp_units": agent_cfg["params"]["network"]["mlp"]["units"],
-            "activation": agent_cfg["params"]["network"]["mlp"]["activation"],
-            "d2rl": agent_cfg["params"]["network"]["mlp"]["d2rl"],
-            "initializer": agent_cfg["params"]["network"]["mlp"]["initializer"]["name"],
-            "log_std_bounds": agent_cfg["params"]["network"]["log_std_bounds"],
-            "fixed_sigma": agent_cfg["params"]["network"]["space"]["continuous"]["fixed_sigma"],
-            "mu_activation": agent_cfg["params"]["network"]["space"]["continuous"]["mu_activation"],
-            "sigma_activation": agent_cfg["params"]["network"]["space"]["continuous"]["sigma_activation"],
-        },
-        
-        # System settings
-        "device": agent_cfg["params"]["config"]["device"],
-        "multi_gpu": agent_cfg["params"]["config"]["multi_gpu"],
-        "seed": agent_cfg["params"]["seed"],
-        
-        # Dataset initialization
-        "dataset_path": args_cli.dataset,
-        "dataset_initialized": args_cli.dataset is not None,
     }
     
     wandb.init(
@@ -258,33 +281,35 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         name=f"{agent_cfg['params']['config']['name']}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}",
         config=wandb_config,
         sync_tensorboard=False,  # Disable to avoid "Episode/" prefixes from tensorboard
+        mode=args_cli.wandb,
     )
     
     # create runner from rl-games
-    runner = Runner(IsaacAlgoObserver())
+    runner = Runner(WandbAlgoObserver())
 
 
     #runner.algo_factory.register_builder('sac_her', lambda **kwargs: sac_her.SACAgent(**kwargs))
     runner.algo_factory.register_builder('sac_utd', lambda **kwargs: sac_utd.SACUTDAgent(**kwargs))
+    #register_network('sac_critic_ln', SACCriticLayerNormBuilder)
+    
     runner.load(agent_cfg)
     runner.create_agent()
-
     # reset the agent and env
     runner.reset()
-    
     # Initialize mixed dataset sampling if dataset is provided
     if args_cli.dataset is not None:
         print(f"[INFO] Loading dataset for mixed sampling: {args_cli.dataset}")
         # Load transitions from dataset
-        dataset_transitions = load_dataset_transitions(
+        dataset_transitions, action_min, action_max = load_dataset_transitions(
             dataset_path=args_cli.dataset,
             env_obs_shape=env.observation_space.shape,
             env_action_shape=env.action_space.shape,
             device=torch.device(agent_cfg["params"]["config"]["device"])
         )
-        
+
         # Get the SAC agent from the runner
         agent = runner.agent
+        agent.initialize_action_norm(action_min, action_max)
         if hasattr(agent, 'replay_buffer'):
             # Create mixed dataset sampler
             mixed_sampler = MixedDatasetSampler(dataset_transitions, agent.replay_buffer)
@@ -305,6 +330,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         print("[INFO] No dataset provided. Using standard replay buffer only.")
     # train the agent
+
+    
 
     if args_cli.checkpoint is not None:
         runner.run({"train": True, "play": False, "sigma": train_sigma, "checkpoint": resume_path})

@@ -22,6 +22,34 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.joint_pos_env_cfg:FrankaReachEnvCfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rl_games_sac_cfg_entry_point": f"{agents.__name__}:rl_games_sac_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:FrankaReachPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Reach-Limits-Franka-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.joint_pos_env_cfg:FrankaReachLimitsEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rl_games_sac_cfg_entry_point": f"{agents.__name__}:rl_games_sac_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:FrankaReachPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_td3_cfg_entry_point": f"{agents.__name__}:skrl_td3_cfg.yaml"
+    },
+)
+
+
+gym.register(
+    id="Isaac-Reach-Franka-Multi-Reset-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.joint_pos_env_cfg:FrankaReachEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:FrankaReachPPORunnerCfg",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
     },
@@ -62,6 +90,24 @@ gym.register(
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     kwargs={
         "env_cfg_entry_point": f"{__name__}.ik_rel_env_cfg:FrankaReachEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rl_games_sac_cfg_entry_point": f"{agents.__name__}:rl_games_sac_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:FrankaReachPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+    },
+    disable_env_checker=True,
+)
+
+
+gym.register(
+    id="Isaac-Reach-Franka-IK-Rel-Multi-Reset-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.ik_rel_env_cfg:FrankaReachMultiResetEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rl_games_sac_cfg_entry_point": f"{agents.__name__}:rl_games_sac_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:FrankaReachPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
     },
     disable_env_checker=True,
 )
@@ -87,5 +133,23 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.osc_env_cfg:FrankaReachEnvCfg_PLAY",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:FrankaReachPPORunnerCfg",
+    },
+)
+
+##
+# Environment with explicit Box(-1, 1) action space
+##
+
+gym.register(
+    id="Isaac-Reach-Franka-BoxAction-v0",
+    entry_point=f"{__name__}.joint_pos_env_cfg:FrankaReachBoxActionEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.joint_pos_env_cfg:FrankaReachBoxActionEnvCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rl_games_sac_cfg_entry_point": f"{agents.__name__}:rl_games_sac_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:FrankaReachPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "skrl_td3_cfg_entry_point": f"{agents.__name__}:skrl_td3_cfg.yaml",
     },
 )

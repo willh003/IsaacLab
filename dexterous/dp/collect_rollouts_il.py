@@ -68,7 +68,7 @@ parser.add_argument("--config", type=str, default=None, help="Override robomimic
 parser.add_argument("--algo", type=str, default="diffusion_policy", help="Algorithm name")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
 parser.add_argument("--mask_observations", action="store_true", default=False, help="Mask observations")
-parser.add_argument("--max_episode_length", type=int, default=100, help="Maximum episode length")
+parser.add_argument("--max_episode_length", type=int, default=50, help="Maximum episode length")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 # append AppLauncher cli args
@@ -252,6 +252,9 @@ def main():
     from rsl_rl.runners import OnPolicyRunner
     from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg
     agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(task_name, args_cli)
+
+    print(f"Overriding environment max_steps from {env_cfg.terminations.time_out.params['max_steps']} to {args_cli.max_episode_length}")
+    env_cfg.terminations.time_out.params['max_steps'] = args_cli.max_episode_length
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
     # ppo_runner = OnPolicyRunner(env, agent_cfg.to_dict(), log_dir=None, device=args_cli.device)
@@ -278,7 +281,6 @@ def main():
     handler.create(args_cli.output, env_name=args_cli.task)
 
     num_envs = args_cli.num_envs
-    num_steps = args_cli.num_steps
     num_rollouts = args_cli.num_rollouts
     dt = env.unwrapped.step_dt
 
@@ -288,8 +290,9 @@ def main():
     episode_step_counts = [0 for _ in range(num_envs)]  # Track steps in current episode
     
     # Track episode completion reasons
-    episodes_completed_by_reset = 0
-    episodes_discarded_by_failure = 0
+    successful_episodes = 0
+    failed_episodes = 0
+    time_out_episodes = 0
     
     policy_wrapper.start_episode()
     # obs, _ = env.reset()
@@ -330,16 +333,18 @@ def main():
                     pbar.update(1)
 
                 for failed_env_id in termination_env_ids["failure"]:
-                    print(f"[INFO] Environment {failed_env_id.item()} failed with {episode_step_counts[time_out_env_id]} steps")
+                    print(f"[INFO] Environment {failed_env_id.item()} failed with {episode_step_counts[failed_env_id]} steps")
                     current_episodes[failed_env_id] = EpisodeData()
                     episode_step_counts[failed_env_id] = 0
                     failed_episodes += 1
                 
                 for time_out_env_id in termination_env_ids["time_out"]:
                     print(f"[INFO] Environment {time_out_env_id.item()} timed out with {episode_step_counts[time_out_env_id]} steps")
+                    all_episodes.append(current_episodes[successful_env_id])
                     current_episodes[time_out_env_id] = EpisodeData()
                     episode_step_counts[time_out_env_id] = 0
                     time_out_episodes += 1
+                    pbar.update(1)
                 
             
             if len(all_episodes) >= num_rollouts:
@@ -374,7 +379,7 @@ def main():
     handler.flush()
     handler.close()
 
-    print(f"[INFO] Episode completion breakdown: {successful_episodes} episodes completed successfully, {failed_episodes} failed episodes discarded, {time_out_episodes} episodes discarded due to time out")
+    print(f"[INFO] Episode completion breakdown: {successful_episodes} episodes completed successfully, {failed_episodes} failed episodes discarded, {time_out_episodes} episodes added due to time out")
     env.close()
 
 

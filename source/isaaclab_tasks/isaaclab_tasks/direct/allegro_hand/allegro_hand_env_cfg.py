@@ -15,14 +15,16 @@ from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-
+import gymnasium as gym
 
 @configclass
 class AllegroHandEnvCfg(DirectRLEnvCfg):
     # env
     decimation = 4
     episode_length_s = 10.0
-    action_space = 16
+    #action_space = 16
+    action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(16,))
+
     observation_space = 124  # (full)
     state_space = 0
     asymmetric_obs = False

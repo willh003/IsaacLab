@@ -66,6 +66,8 @@
             }
         },
         "goal_mode": "relabel",
+        "goals_per_sequence": 4,
+        "max_lookahead": null,
         "goal_horizon": null,
         "cuda": true,
         "batch_size": 100,

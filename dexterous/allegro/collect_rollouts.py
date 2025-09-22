@@ -155,6 +155,7 @@ def main():
                 # Add rewards to episodes after step
                 for i in range(num_envs):
                     current_episodes[i].add("rewards", rewards[i].cpu())
+                    
                 
                 termination_env_ids = get_termination_env_ids(env)
 
@@ -162,7 +163,11 @@ def main():
                     print(f"[INFO] Environment {successful_env_id.item()} succeeded with {episode_step_counts[successful_env_id]} steps")
 
                     if episode_step_counts[successful_env_id] >= args_cli.min_length:
+
+                        # Fix the reward access
+                        current_episodes[successful_env_id].data["rewards"][-1] = current_episodes[successful_env_id].data["rewards"][-2]
                         all_episodes.append(current_episodes[successful_env_id])
+
                         current_episodes[successful_env_id] = EpisodeData()
                         episode_step_counts[successful_env_id] = 0
                         successful_episodes += 1

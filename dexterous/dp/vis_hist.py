@@ -9,9 +9,9 @@ data = {
         'successes': 0.008,  # 0.8%
         'failures': 0.062,  # 6.2%
     },
-    '10k, train no mask, eval no mask': {
-        'successes': 0.875,  # 87.5%
-        'failures': 0.023,  # 2.3%
+    '10k stay 20 worse RL': {
+        'successes': 0.805,
+        'failures': 0.047,
     },
     '10k, train mask, eval mask': {
         'successes': 0.016,  # 1.6%
@@ -20,11 +20,27 @@ data = {
     '10k, train mask, eval no mask': {
         'successes': 0.602,  # 60.2%
         'failures': 0.023,  # 2.3%
-    }
+    },
     '1k stay 20': {
         'successes': 0.000,
         'failures': 0.000,
-    }
+    },
+    '10k stay 20 better RL': {
+        'successes': 0.930,
+        'failures': 0.039,
+    },
+    '10k stay 1 better RL': {
+        'successes': 0.812,
+        'failures': 0.078,
+    },
+    '10k stay 20 better RL + goal mask': {
+        'successes': 0.000,
+        'failures': 0.070,
+    },
+    '10k stay 20 better RL + goal marginal': {
+        'successes': 0.016,
+        'failures': 0.070,
+    },
 }
 
 
@@ -38,9 +54,14 @@ method_colors = {
     "transitions in train set": '#1abc9c',       # blue
     "standard training": '#e74c3c',         # red
     "10k, train no mask, eval mask": '#e74c3c',       # blue
-    "10k, train no mask, eval no mask": '#f39c12',         # red
+    "10k, train no mask, eval no mask": '#f39c12',
+    "10k stay 20 worse RL": '#f39c12',       # blue
     "10k, train mask, eval mask": '#3498db',       # blue
     "10k, train mask, eval no mask": '#16a085',         # red
+    "1k stay 20": '#3498db',       # blue
+    "10k stay 20 better RL": '#e74c3c',         # red
+    "10k stay 1 better RL": '#2c3e50',         # red
+    "10k stay 20 better RL + goal mask": '#16a085',         # red
 }
 
 # Extended color bank for future use
@@ -68,9 +89,7 @@ color_bank = [
 ]
 
 
-keys_to_plot = ["10k, train no mask, eval mask", "10k, train no mask, eval no mask", "10k, train mask, eval mask", "10k, train mask, eval no mask"]
-
-
+keys_to_plot = ["10k stay 20 better RL", "10k stay 20 better RL + goal mask", "10k stay 20 better RL + goal marginal"]
 # Extract data for plotting, only plot keys_to_plot
 experiments = [exp for exp in data.keys() if exp in keys_to_plot]
 successes = [data[exp]["successes"] for exp in experiments]
@@ -85,17 +104,17 @@ failures = [data[exp]["failures"] for exp in experiments]
 # Create the histogram
 x = np.arange(len(experiments))
 width = 0.35
-successes = failures
+
 fig, ax = plt.subplots(figsize=(10, 6))
-bars1 = ax.bar(x, successes, width, label='Successes', 
+bars1 = ax.bar(x - width/2, successes, width, label='Successes', 
                color=[method_colors.get(exp, color_bank[i % len(color_bank)]) for i, exp in enumerate(experiments)], alpha=0.7)
-# bars2 = ax.bar(x + width/2, failures, width, label='Failures', 
-#                color=[method_colors.get(exp, color_bank[i % len(color_bank)]) for i, exp in enumerate(experiments)], alpha=0.4)
+bars2 = ax.bar(x + width/2, failures, width, label='Failures', 
+               color=[method_colors.get(exp, color_bank[i % len(color_bank)]) for i, exp in enumerate(experiments)], alpha=0.4)
 
 # Add labels and title (bold)
 ax.set_xlabel('Experimental Conditions', fontweight='bold')
 ax.set_ylabel('Rate', fontweight='bold')
-ax.set_title('Failure Rates', fontweight='bold')
+ax.set_title('Success/Failure Rates', fontweight='bold')
 ax.set_xticks(x)
 ax.set_xticklabels(experiments)
 #ax.legend()
@@ -107,10 +126,10 @@ for bar in bars1:
     ax.text(bar.get_x() + bar.get_width()/2., height,
             f'{height}', ha='center', va='bottom', fontweight='bold')
 
-# for bar in bars2:
-#     height = bar.get_height()
-#     ax.text(bar.get_x() + bar.get_width()/2., height,
-#             f'{height}', ha='center', va='bottom', fontweight='bold')
+for bar in bars2:
+    height = bar.get_height()
+    ax.text(bar.get_x() + bar.get_width()/2., height,
+            f'{height}', ha='center', va='bottom', fontweight='bold')
 
 plt.tight_layout()
 plt.grid(axis='y', alpha=0.3)

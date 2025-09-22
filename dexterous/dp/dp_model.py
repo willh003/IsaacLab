@@ -127,6 +127,8 @@ class MaskedObservationGroupEncoder(ObsNets.ObservationGroupEncoder):
         else:
             # Train on randomly sampled timesteps, separate for each noise group
             should_mask = torch.rand(batch_size, device=device) < self.train_mask_prob
+            if should_mask.any():
+                print(f"masking {should_mask}")
 
 
         modalities = self.mask_observations["modalities"]
@@ -564,6 +566,16 @@ class DiffusionPolicyUNet(PolicyAlgo):
             in_range = (-1 <= actions) & (actions <= 1)
             all_in_range = torch.all(in_range).item()
             if not all_in_range:
+                # Debug: print out-of-range values
+                out_of_range_mask = ~in_range
+                out_of_range_actions = actions[out_of_range_mask]
+                action_min = torch.min(actions).item()
+                action_max = torch.max(actions).item()
+                print(f"[DEBUG] Action range check failed:")
+                print(f"  Action range: [{action_min:.6f}, {action_max:.6f}]")
+                print(f"  Out-of-range count: {torch.sum(out_of_range_mask).item()}")
+                if len(out_of_range_actions) > 0:
+                    print(f"  First few out-of-range values: {out_of_range_actions[:5].tolist()}")
                 raise ValueError("'actions' must be in range [-1,1] for Diffusion Policy! Check if hdf5_normalize_action is enabled.")
             self.action_check_done = True
         
@@ -685,18 +697,19 @@ class DiffusionPolicyUNet(PolicyAlgo):
         """
         # setup inference queues
         To = self.algo_config.horizon.observation_horizon
-        Ta = self.algo_config.horizon.action_horizon
         obs_queue = deque(maxlen=To)
-        action_queue = deque(maxlen=Ta)
         goal_queue = deque(maxlen=To)
         self.obs_queue = obs_queue
-        self.action_queue = action_queue
         self.goal_queue = goal_queue
-        
+        self.reset_action_queue()
         # Reset fixed noise when starting a new episode
         #if hasattr(self.nets["policy"]["obs_encoder"], 'reset_fixed_noise'):
         #    self.nets["policy"]["obs_encoder"].reset_fixed_noise()
     
+
+    def reset_action_queue(self):
+        self.action_queue = deque(maxlen=self.algo_config.horizon.action_horizon)
+
     def get_action(self, obs_dict, goal_dict=None, noise_group_timesteps=None, mask_observations=False):
         """
         Get policy action outputs.
@@ -789,8 +802,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # else:
         #     nets["policy"]["obs_encoder"].reset_fixed_noise()
         
-        
-
         #nets["policy"]["obs_encoder"].reset_fixed_noise()
         # Encode observations with deterministic masking choice during inference
         obs_features = TensorUtils.time_distributed(

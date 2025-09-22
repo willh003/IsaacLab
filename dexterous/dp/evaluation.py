@@ -62,14 +62,15 @@ class EpisodeEvaluator:
     def update_step_evaluation(self, obs_dict, goal_dict, rewards=None):
         """Update evaluation for current step."""
         if 'object_quat' not in obs_dict or 'object_quat' not in goal_dict:
-            return
+            rot_distances = torch.zeros(self.num_envs)
+        else:   
+                
+            current_quat = obs_dict['object_quat']
+            goal_quat = goal_dict['object_quat']
             
-        current_quat = obs_dict['object_quat']
-        goal_quat = goal_dict['object_quat']
-        
-        # Compute rotational distance for each environment
-        rot_distances = compute_rotational_distance(current_quat, goal_quat)
-        
+            # Compute rotational distance for each environment
+            rot_distances = compute_rotational_distance(current_quat, goal_quat)
+            
         # Store per-environment evaluation data
         for env_idx in range(self.num_envs):
             # Skip environments that have already completed their episode
@@ -89,7 +90,10 @@ class EpisodeEvaluator:
                 reward_value = rewards[env_idx].item() if hasattr(rewards[env_idx], 'item') else float(rewards[env_idx])
                 self.current_episode_rewards[env_idx].append(reward_value)
             
+            
             self.episode_step_counts[env_idx] += 1
+
+        print(self.current_episode_evaluations)
     
     def check_episode_completion(self, env):
         """Check for episode completion and handle evaluation."""
@@ -109,6 +113,7 @@ class EpisodeEvaluator:
 
     def _finalize_episode(self, env_idx, is_successful, is_failed):
         """Finalize evaluation for completed episode."""
+        
         if len(self.current_episode_evaluations[env_idx]) > 0:
             episode_mean_eval = np.mean(self.current_episode_evaluations[env_idx][:-2])
             initial_dist = self.current_episode_initial_distances[env_idx]

@@ -35,6 +35,9 @@ class FrankaReachEnvCfg(joint_pos_env_cfg.FrankaReachEnvCfg):
         )
 
 
+
+
+
 @configclass
 class FrankaReachEnvCfg_PLAY(FrankaReachEnvCfg):
     def __post_init__(self):

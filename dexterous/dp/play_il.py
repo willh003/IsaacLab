@@ -216,7 +216,7 @@ def main():
     
     # Initialize per-episode evaluation tracking
     num_envs = env_cfg.scene.num_envs
-    evaluator = EpisodeEvaluator(num_envs) if "allegro" in args_cli.task.lower() else None
+    evaluator = EpisodeEvaluator(num_envs) if "allegro" in args_cli.task.lower() and args_cli.eval else None
     # Initialize progress bar
     if args_cli.n_steps is not None:
         pbar = tqdm(total=args_cli.n_steps, desc="Rollout Progress")
@@ -289,6 +289,7 @@ def main():
             evaluator.update_step_evaluation(obs_dict, goal_dict, rew)
             evaluator.check_episode_completion(env)
 
+
         n_steps += 1
         pbar.update(1)
 
@@ -298,6 +299,7 @@ def main():
     
     # Close progress bar
     pbar.close()
+    
     
     # Finalize a
     # ny in-progress episodes and print evaluation results
@@ -314,5 +316,4 @@ if __name__ == "__main__":
     
 
     main()
-    # close sim app
     simulation_app.close()

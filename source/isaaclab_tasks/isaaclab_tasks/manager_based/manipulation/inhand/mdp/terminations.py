@@ -94,6 +94,16 @@ def consecutive_success(
     return command_term.metrics["consecutive_success"] >= num_required_successes
 
 
+def final_goal_reached(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    orientation_success_threshold: float,
+) -> torch.Tensor:
+    """Check if the object orientation is successful."""
+    command_term: InHandReOrientationCommand = env.command_manager.get_term(command_name)
+
+    return command_term.metrics["final_orientation_error"] < orientation_success_threshold
+
 def step_timeout(env: ManagerBasedRLEnv, max_steps: int) -> torch.Tensor:
     """Check if the step timeout has been reached."""
     return env.episode_length_buf >= max_steps

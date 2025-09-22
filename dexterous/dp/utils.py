@@ -26,8 +26,10 @@ from robomimic.algo import algo_factory, RolloutPolicy
 # Global registry cache
 _TASK_REGISTRY_CACHE = None
 
-
-ADDL_CONFIG_KEYS = ["goal_mode", "goal_horizon", "noise_groups", "mask_observations", "train_mask_prob", "uncond_weight"]
+"""
+If you ever get "RuntimeError: This config has been locked and ____ is not in this config"
+"""
+ADDL_CONFIG_KEYS = ["goal_mode", "goal_horizon", "goals_per_sequence", "max_lookahead", "noise_groups", "mask_observations", "train_mask_prob", "uncond_weight", "clip_actions"]
 def filter_config_dict(cfg, base_cfg):
     """
     Recursively filter out keys from cfg that are not present in base_cfg.
@@ -444,9 +446,59 @@ def load_action_normalization_params(checkpoint_path):
     exp_dir = os.path.dirname(os.path.dirname(checkpoint_path))
     norm_file = os.path.join(exp_dir, "logs", "normalization_params.txt")
     with open(norm_file, "r") as f:
-        lines = f.readlines()
-        min_val = float(lines[0].split(":")[1].strip())
-        max_val = float(lines[1].split(":")[1].strip())
+        content = f.read()
+
+    def _parse_list_or_scalar(val_str):
+        s = val_str.strip()
+        # Handle bracketed arrays that may be whitespace-separated (no commas) and multi-line
+        if "[" in s and "]" in s:
+            inner = s[s.find("[") + 1:s.rfind("]")]
+            # Extract all float-like tokens (supports scientific notation)
+            import re
+            nums = re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", inner)
+            if len(nums) == 1:
+                return float(nums[0])
+            if len(nums) > 1:
+                return np.array([float(x) for x in nums], dtype=float)
+            # If no numbers found, fall back to literal_eval/float
+        # Try literal_eval for regular Python literals (scalars or comma-separated lists)
+        try:
+            parsed = ast.literal_eval(s)
+            if isinstance(parsed, (list, tuple, np.ndarray)):
+                return np.array(parsed, dtype=float)
+            return float(parsed)
+        except Exception:
+            # Final fallback: try direct float conversion
+            return float(s)
+
+    # Simple parse: grab everything between 'min:' and 'max:' (handles multi-line arrays)
+    try:
+        if "min:" in content and "max:" in content:
+            i_min = content.index("min:") + len("min:")
+            i_max = content.index("max:")
+            min_str = content[i_min:i_max].strip()
+            max_str = content[i_max + len("max:"):].strip()
+
+            min_val = _parse_list_or_scalar(min_str)
+            max_val = _parse_list_or_scalar(max_str)
+            return min_val, max_val
+    except Exception:
+        # Fall back to line-based parsing below
+        pass
+
+    # Fallback: look for single lines starting with 'min:' and 'max:' (original behavior)
+    lines = [ln for ln in content.splitlines() if ln.strip() and not ln.strip().startswith('#')]
+    min_line = next((ln for ln in lines if ln.strip().lower().startswith('min:')), None)
+    max_line = next((ln for ln in lines if ln.strip().lower().startswith('max:')), None)
+
+    if min_line is None or max_line is None:
+        raise ValueError(f"Could not find 'min:' and 'max:' entries in {norm_file}")
+
+    min_str = min_line.split(":", 1)[1].strip()
+    max_str = max_line.split(":", 1)[1].strip()
+
+    min_val = _parse_list_or_scalar(min_str)
+    max_val = _parse_list_or_scalar(max_str)
     return min_val, max_val
 
 

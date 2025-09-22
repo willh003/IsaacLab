@@ -269,6 +269,7 @@ class ObservationManager(ManagerBase):
         # otherwise return a dict with observations of all groups
 
         # Cache the observations.
+        
         self._obs_buffer = obs_buffer
         return obs_buffer
 

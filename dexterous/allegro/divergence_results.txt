@@ -1,0 +1,13 @@
+Object Quaternion Divergence Results (MMD)
+==================================================
+Dataset 1: /home/will/IsaacLab/dexterous/allegro/data/cleanv3_allegro_inhand_axial_rollouts_10000.hdf5
+Dataset 2: /home/will/IsaacLab/dexterous/allegro/data/il_allegro_inhand_axial.hdf5
+MMD distance: 0.0000
+Kernel: rbf
+Dataset 1 episodes: 10002
+Dataset 2 episodes: 764
+Dataset 1 mean length: 22.0
+Dataset 2 mean length: 46.6
+Dataset 1 pairs: 10000
+Dataset 2 pairs: 10000
+Quaternion dimensionality: 4

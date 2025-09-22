@@ -199,17 +199,15 @@ def main():
                 goal_dict = get_goal_from_env(obs, goal_keys, device=args_cli.device)
                 
                 # Update evaluation tracking
-                evaluator.update_step_evaluation(obs_dict, goal_dict, rew)
-                
-                # Check for episode completion and update evaluation
-                evaluator.check_episode_completion(env)
+                if args_cli.eval:
+                    evaluator.update_step_evaluation(obs_dict, goal_dict, rew)
+                    evaluator.check_episode_completion(env)
                 
                 rewards = np.concatenate([rewards, rew.cpu().numpy()])
 
                 n_steps += len(actions)  # increment all envs' episode lengths
 
                 # Get the command term for the object pose
-                command_term = env.unwrapped.command_manager.get_term("object_pose")
 
                 # Count number of resets (success or timeout)
                 # new_consecutive_success = command_term.metrics["consecutive_success"].cpu().numpy()
@@ -226,8 +224,9 @@ def main():
                 pbar.set_description(f"Mean reward: {rew.mean().item():.2f}, max reward: {rew.max().item():.2f}")
 
         # Finalize any in-progress episodes and print evaluation results
-        evaluator.finalize_all_episodes()
-        evaluator.print_evaluation_results()
+        if args_cli.eval:   
+            evaluator.finalize_all_episodes()
+            evaluator.print_evaluation_results()
 
         # After the loop, print the mean
         print(f"Mean reward: {np.mean(rewards):.2f} over {n_steps} steps")
